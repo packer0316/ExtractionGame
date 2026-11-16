@@ -208,7 +208,7 @@ export function createParticles(scene) {
   const fx = {
     sparks: new Sparks(scene),
     crumbs: new Burst(scene, new THREE.TetrahedronGeometry(0.014, 0), crumbMat, 360, { radius: 0.01 }),
-    coins: new Burst(scene, new THREE.CylinderGeometry(0.045, 0.045, 0.011, 18), coinMat, 160, { radius: 0.012, bounce: 0.45 }),
+    coins: new Burst(scene, new THREE.CylinderGeometry(0.045, 0.045, 0.011, 18), coinMat, 320, { radius: 0.012, bounce: 0.45 }),
     puffs: new Puffs(scene),
     update(dt) {
       fx.sparks.update(dt); fx.crumbs.update(dt); fx.coins.update(dt); fx.puffs.update(dt);

@@ -67,14 +67,14 @@ export function archAt(key, s) {
 // Reference dimensions of each baked tooth mesh (local space: origin at the gum
 // line, +Y towards the biting edge, +Z towards the lips, roots along -Y).
 export const TOOTH_TYPES = {
-  incisor: { w0: 0.1, ch0: 0.14, roots: [{ x0: 0, x1: 0.004, z1: -0.012, r0: 0.031, r1: 0.007, k: 1 }] },
-  canine: { w0: 0.095, ch0: 0.155, roots: [{ x0: 0, x1: 0.006, z1: -0.016, r0: 0.036, r1: 0.007, k: 1 }] },
-  premolar: { w0: 0.09, ch0: 0.12, roots: [{ x0: 0, x1: 0.002, z1: 0, r0: 0.032, r1: 0.008, k: 1 }] },
+  incisor: { w0: 0.1, ch0: 0.14, roots: [{ x0: 0, x1: 0.004, z1: -0.012, bendX: 0.021, bendZ: -0.012, r0: 0.031, r1: 0.006, k: 1 }] },
+  canine: { w0: 0.095, ch0: 0.155, roots: [{ x0: 0, x1: 0.006, z1: -0.016, bendX: 0.034, bendZ: -0.016, r0: 0.036, r1: 0.006, k: 1 }] },
+  premolar: { w0: 0.09, ch0: 0.12, roots: [{ x0: 0, x1: 0.002, z1: 0, bendX: 0.026, bendZ: -0.014, r0: 0.032, r1: 0.0065, k: 1 }] },
   molar: {
     w0: 0.125, ch0: 0.115,
     roots: [
-      { x0: -0.03, x1: -0.047, z1: 0, r0: 0.028, r1: 0.008, k: 1 },
-      { x0: 0.03, x1: 0.049, z1: 0.004, r0: 0.028, r1: 0.008, k: 0.93 },
+      { x0: -0.03, x1: -0.047, z1: 0, bendX: 0.018, bendZ: -0.018, r0: 0.028, r1: 0.0065, k: 1 },
+      { x0: 0.03, x1: 0.049, z1: 0.004, bendX: 0.022, bendZ: -0.012, r0: 0.028, r1: 0.007, k: 0.93 },
     ],
   },
 };
@@ -82,6 +82,7 @@ export const TOOTH_TYPES = {
 // Baked mesh variants (upper incisors get shorter roots so they clear the nose).
 export const TOOTH_MESHES = {
   UI: { type: 'incisor', rootLen: 0.175 },
+  UI2: { type: 'incisor', rootLen: 0.175, lateral: true },
   LI: { type: 'incisor', rootLen: 0.23 },
   C: { type: 'canine', rootLen: 0.3 },
   P: { type: 'premolar', rootLen: 0.235 },
@@ -91,8 +92,8 @@ export const TOOTH_MESHES = {
 // One quadrant, from the midline backwards: [mesh, zone, width, crownHeight, tilt°]
 const QUADRANT = {
   U: [
-    ['UI', 'incisor', 0.112, 0.15, 14],
-    ['UI', 'incisor', 0.092, 0.134, 12],
+    ['UI', 'incisor', 0.112, 0.15, 9],
+    ['UI2', 'incisor', 0.092, 0.137, 8],
     ['C', 'canine', 0.098, 0.155, 8],
     ['P', 'premolar', 0.088, 0.12, 3],
     ['P', 'premolar', 0.088, 0.118, 2],
@@ -109,7 +110,20 @@ const QUADRANT = {
     ['M', 'molar', 0.132, 0.118, -2],
   ],
 };
-const GAP = 0.004;
+const GAP = 0.0028;
+
+// The same curved centreline drives the visible roots and their socket cutters.
+// Most of the bend is in the apical third; the neck remains aligned with the crown.
+export const rootBend = (t) => t * t * (0.25 + 0.75 * t);
+export function rootAt(r, len, t) {
+  const bend = rootBend(t);
+  return {
+    x: r.x0 + (r.x1 - r.x0) * t + r.bendX * bend,
+    y: 0.005 - (len + 0.005) * t,
+    z: r.z1 * t + r.bendZ * bend,
+    radius: r.r0 + (r.r1 - r.r0) * Math.pow(t, 1.18),
+  };
+}
 
 function buildTeeth() {
   const teeth = [];
@@ -121,7 +135,10 @@ function buildTeeth() {
         const sc = s + width * 0.5;
         s += width + GAP;
         const p = archAt(archKey, side * sc);
-        const tilt = (tiltDeg * Math.PI) / 180;
+        // Small, repeatable differences soften the mechanically perfect row.
+        // Shared with the baker so the sockets still match the roots exactly.
+        const variation = Math.sin((i + 1) * 2.17 + (archKey === 'U' ? 0 : 1.4));
+        const tilt = ((tiltDeg + variation * 0.65) * Math.PI) / 180;
         const c = Math.cos(tilt), sn = Math.sin(tilt);
         const y0 = [0, A.dir, 0], z0 = [p.nx, 0, p.nz];
         const yAxis = [c * y0[0] + sn * z0[0], c * y0[1] + sn * z0[1], c * y0[2] + sn * z0[2]];
@@ -135,12 +152,15 @@ function buildTeeth() {
         const sx = width / type.w0;
         const sy = ch / type.ch0;
         const sz = 0.5 + 0.5 * sx;
+        const mirror = side * A.dir;
+        const apex = rootAt(type.roots[0], TOOTH_MESHES[mesh].rootLen * type.roots[0].k, 1);
         teeth.push({
           id: `${archKey}${side < 0 ? 'L' : 'R'}${i + 1}`,
           arch: archKey, side, n: i + 1, mesh, zone, width, crown: ch,
-          pos: [p.x, A.yCerv, p.z],
+          pos: [p.x, A.yCerv + variation * 0.0012, p.z],
           xAxis, yAxis, zAxis,
-          scale: [sx, sy, sz],
+          scale: [sx * mirror, sy, sz],
+          rootTip: [apex.x * sx * mirror, apex.y * sy, apex.z * sz],
           rootLen: TOOTH_MESHES[mesh].rootLen * sy,
         });
       });
@@ -150,18 +170,21 @@ function buildTeeth() {
 }
 export const TEETH = buildTeeth();
 
-/** Root cones of a tooth in skull space: [ax,ay,az, bx,by,bz, r0, r1]. */
-export function toothRootCones(t, clearance = 0) {
+/** Curved root passages, approximated by short overlapping tapered segments. */
+export function toothRootCones(t, clearance = 0, neckOnly = false) {
   const type = TOOTH_TYPES[TOOTH_MESHES[t.mesh].type];
   const [sx, sy, sz] = t.scale;
-  const rs = (sx + sz) * 0.5;
-  return type.roots.map((r) => {
-    const len = TOOTH_MESHES[t.mesh].rootLen * r.k * sy;
-    const a = [0, 1, 2].map((i) => t.pos[i] + t.xAxis[i] * r.x0 * sx + t.yAxis[i] * 0.015);
-    const b = [0, 1, 2].map(
-      (i) => t.pos[i] + t.xAxis[i] * r.x1 * sx - t.yAxis[i] * len + t.zAxis[i] * r.z1 * sz,
-    );
-    return [...a, ...b, r.r0 * rs + clearance, r.r1 + clearance];
+  const rs = Math.max(Math.abs(sx), sz);
+  const world = (p) => [0, 1, 2].map(i => t.pos[i] + t.xAxis[i] * p.x * sx + t.yAxis[i] * p.y * sy + t.zAxis[i] * p.z * sz);
+  return type.roots.flatMap((r) => {
+    const len = TOOTH_MESHES[t.mesh].rootLen * r.k;
+    const result = [];
+    for (let i = 0; i < (neckOnly ? 1 : 8); i++) {
+      const a = rootAt(r, len, i / 8), b = rootAt(r, len, (i + 1) / 8);
+      if (i === 0) a.y = 0.015;
+      result.push([...world(a), ...world(b), a.radius * rs + clearance, b.radius * rs + clearance]);
+    }
+    return result;
   });
 }
 

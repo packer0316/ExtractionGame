@@ -228,7 +228,7 @@ button:disabled { opacity: 0.35; cursor: default; }
 }
 
 .banner {
-  position: absolute; left: 50%; top: 15%; transform: translate(-50%, -50%) scale(0.6);
+  position: absolute; left: 50%; top: 14%; transform: translate(-50%, -50%) scale(0.6);
   opacity: 0; text-align: center; white-space: nowrap;
   transition: opacity 0.25s, transform 0.4s cubic-bezier(0.2, 1.5, 0.4, 1);
 }
@@ -236,6 +236,97 @@ button:disabled { opacity: 0.35; cursor: default; }
 .banner span { display: block; font-size: 44px; font-weight: 800; letter-spacing: 0.3em; margin-right: -0.3em; color: #ffe7a8; text-shadow: 0 0 40px rgba(255, 190, 70, 0.8); }
 .banner.mega span { font-size: 62px; color: #fff6d2; }
 .banner b { display: block; font-size: 30px; color: var(--green); font-variant-numeric: tabular-nums; text-shadow: 0 2px 16px rgba(0, 0, 0, 0.9); }
+
+.banner i { display: block; font-style: normal; font-size: 64px; font-weight: 800; line-height: 1.05; color: #ffe08a; font-variant-numeric: tabular-nums; text-shadow: 0 0 34px rgba(255, 190, 70, 0.85), 0 2px 18px rgba(0, 0, 0, 0.9); }
+.banner.mega i, .banner.jackpot i { font-size: 92px; color: #fff3bf; }
+.banner b.done { animation: bannerDone 0.5s ease; }
+@keyframes bannerDone { 40% { transform: scale(1.25); color: #fff; } }
+.banner.mega span, .banner.jackpot span {
+  background: linear-gradient(90deg, #fff6d2, #ffd45e, #ffffff, #ff9fe0, #9fe6ff, #fff6d2);
+  background-size: 300% 100%;
+  -webkit-background-clip: text; background-clip: text; color: transparent;
+  animation: shine 1.5s linear infinite;
+  filter: drop-shadow(0 0 22px rgba(255, 200, 90, 0.85));
+  text-shadow: none;
+}
+.banner.jackpot span { font-size: 82px; letter-spacing: 0.22em; margin-right: -0.22em; }
+.banner.mega b, .banner.jackpot b { font-size: 44px; color: #fff3bf; text-shadow: 0 0 26px rgba(255, 190, 70, 0.9), 0 2px 16px rgba(0, 0, 0, 0.9); }
+@keyframes shine { to { background-position: -300% 0; } }
+
+.tick {
+  position: absolute; transform: translate(-50%, -50%);
+  font-size: 30px; font-weight: 800; color: #ffe2a1; font-variant-numeric: tabular-nums;
+  text-shadow: 0 0 18px rgba(255, 190, 70, 0.9), 0 2px 10px rgba(0, 0, 0, 0.9);
+  animation: tick 0.9s cubic-bezier(0.2, 0.9, 0.3, 1) forwards; white-space: nowrap;
+}
+@keyframes tick {
+  0% { opacity: 0; transform: translate(-50%, -20%) scale(0.4); }
+  18% { opacity: 1; transform: translate(-50%, -120%) scale(1.25); }
+  100% { opacity: 0; transform: translate(-50%, -330%) scale(0.9); }
+}
+
+/* ------------------------------------------------------------------ prize ladder */
+.ladder {
+  position: absolute; left: 50%; top: 84px; transform: translate(-50%, -14px);
+  display: flex; flex-direction: column; align-items: center; gap: 8px;
+  padding: 10px 18px 12px; border-radius: 14px;
+  background: rgba(8, 10, 14, 0.62); border: 1px solid var(--line);
+  -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px);
+  opacity: 0; pointer-events: none !important;
+  transition: opacity 0.3s ease, transform 0.3s ease, border-color 0.3s, box-shadow 0.3s;
+  --heat: #e9edf2;
+}
+.ladder.show { opacity: 1; transform: translate(-50%, 0); }
+.ladder[data-heat='1'] { --heat: #ffe2a1; }
+.ladder[data-heat='2'] { --heat: #ffc04a; border-color: rgba(255, 192, 74, 0.5); }
+.ladder[data-heat='3'] { --heat: #ff8a3c; border-color: rgba(255, 138, 60, 0.7); box-shadow: 0 0 34px rgba(255, 138, 60, 0.35); }
+.ladder[data-heat='4'] { --heat: #ff5fb0; border-color: rgba(255, 95, 176, 0.85); box-shadow: 0 0 54px rgba(255, 95, 176, 0.5); }
+.ladder-head { display: flex; gap: 10px; align-items: baseline; font-size: 11px; letter-spacing: 0.2em; color: var(--mute); }
+.ladder-zone { color: var(--gold); font-size: 13px; font-weight: 600; }
+.ladder-cells { display: flex; gap: 6px; align-items: center; }
+.cell {
+  min-width: 46px; padding: 5px 8px; border-radius: 7px; text-align: center;
+  font-size: 13px; font-weight: 700; font-variant-numeric: tabular-nums;
+  color: rgba(233, 237, 242, 0.42); background: rgba(255, 255, 255, 0.04); border: 1px solid rgba(255, 255, 255, 0.12);
+  transition: transform 0.18s cubic-bezier(0.2, 1.6, 0.4, 1), background 0.2s, color 0.2s, box-shadow 0.2s;
+}
+.cell.on { color: #1a1104; background: linear-gradient(180deg, #ffe7a8, #d39a35); border-color: transparent; }
+.cell.now { transform: scale(1.32); background: linear-gradient(180deg, #fff, var(--heat)); box-shadow: 0 0 22px var(--heat); z-index: 1; }
+.cell.tease { animation: tease 0.42s ease-in-out infinite; }
+@keyframes tease {
+  50% { color: #fff; border-color: var(--heat); box-shadow: 0 0 16px var(--heat); background: rgba(255, 255, 255, 0.14); transform: scale(1.1); }
+}
+.ladder-now { display: flex; align-items: baseline; gap: 14px; }
+.ladder-mult { font-size: 54px; font-weight: 800; line-height: 1; color: var(--heat); font-variant-numeric: tabular-nums; text-shadow: 0 0 26px var(--heat), 0 2px 12px rgba(0, 0, 0, 0.9); transition: color 0.2s; }
+.ladder-win { font-size: 24px; font-weight: 700; color: var(--green); font-variant-numeric: tabular-nums; text-shadow: 0 2px 12px rgba(0, 0, 0, 0.9); min-width: 90px; }
+.ladder.punch .ladder-now { animation: ladderPunch 0.42s cubic-bezier(0.2, 1.5, 0.4, 1); }
+@keyframes ladderPunch { 0% { transform: scale(1.75); filter: brightness(2.4); } 100% { transform: scale(1); filter: none; } }
+.ladder.slip { animation: ladderSlip 0.45s ease; }
+@keyframes ladderSlip {
+  0%, 100% { transform: translate(-50%, 0); }
+  15% { transform: translate(calc(-50% - 12px), 4px) rotate(-1.5deg); }
+  35% { transform: translate(calc(-50% + 10px), -2px) rotate(1.2deg); }
+  55% { transform: translate(calc(-50% - 7px), 2px); }
+  75% { transform: translate(calc(-50% + 4px), 0); }
+}
+.ladder.locked .cell.now { animation: locked 0.5s ease 3; }
+@keyframes locked { 50% { transform: scale(1.6); box-shadow: 0 0 40px #fff; } }
+.ladder.locked .ladder-mult { animation: ladderPunch 0.6s cubic-bezier(0.2, 1.5, 0.4, 1); }
+.ladder.dud { --heat: #8b94a1; }
+.ladder.dud .ladder-win { color: var(--mute); }
+
+@media (max-width: 900px) {
+  .ladder { top: 66px; padding: 6px 8px 8px; gap: 5px; max-width: calc(100vw - 16px); }
+  .ladder-cells { gap: 3px; }
+  .cell { min-width: 34px; padding: 3px 4px; font-size: 11px; }
+  .ladder-mult { font-size: 38px; }
+  .ladder-win { font-size: 18px; min-width: 60px; }
+  .banner span { font-size: 28px; }
+  .banner.mega span { font-size: 36px; }
+  .banner.jackpot span { font-size: 44px; }
+  .banner i { font-size: 48px; }
+  .banner.mega i, .banner.jackpot i { font-size: 60px; }
+}
 
 /* ------------------------------------------------------------------ smaller screens */
 @media (max-width: 1180px), (max-height: 760px) {

@@ -13,14 +13,14 @@ function geometry() {
   blade.closePath();
   GEO = {
     // fixed sleeve that sits in the socket
-    housing: revolve([[0.166, -0.34], [0.178, -0.34], [0.178, -0.02], [0.174, 0.0], [0.166, 0.0], [0.166, -0.34]], 56),
-    bezel: revolve([[0.164, -0.012], [0.18, -0.012], [0.186, 0.0], [0.186, 0.014], [0.178, 0.024], [0.164, 0.024], [0.164, -0.012]], 64),
+    housing: revolve([[0.166, -0.34], [0.178, -0.34], [0.178, -0.02], [0.174, 0.0], [0.166, 0.0], [0.166, -0.34]], 96),
+    bezel: revolve([[0.164, -0.012], [0.18, -0.012], [0.186, 0.0], [0.186, 0.014], [0.178, 0.024], [0.164, 0.024], [0.164, -0.012]], 128),
     backCap: revolve([[0, -0.34], [0.178, -0.34]], 40),
     // moving lens barrel
     barrel: revolve(
       [[0.0, -0.3], [0.146, -0.3], [0.146, -0.07], [0.152, -0.064], [0.152, 0.0], [0.146, 0.012], [0.134, 0.014], [0.134, -0.02],
         [0.118, -0.03], [0.118, -0.05], [0.1, -0.06], [0.1, -0.085], [0.082, -0.095], [0.082, -0.13], [0.0, -0.13]],
-      56,
+      96,
     ),
     knurl: (() => {
       // grip ring with fine ridges
@@ -36,13 +36,15 @@ function geometry() {
       }
       return g;
     })(),
-    ringA: revolve(ringProfile(0.104, 0.116, -0.036, -0.026, 0.002), 56),
-    ringB: revolve(ringProfile(0.085, 0.098, -0.07, -0.06, 0.002), 48),
+    ringA: revolve(ringProfile(0.104, 0.116, -0.036, -0.026, 0.002), 96),
+    ringB: revolve(ringProfile(0.085, 0.098, -0.07, -0.06, 0.002), 96),
     tick: new THREE.BoxGeometry(0.004, 0.012, 0.004),
-    glow: new THREE.TorusGeometry(0.076, 0.0045, 8, 56),
+    glow: new THREE.TorusGeometry(0.085, 0.0036, 16, 128),
+    glowEdge: new THREE.TorusGeometry(0.092, 0.00085, 12, 128),
     blade: new THREE.ExtrudeGeometry(blade, { depth: 0.002, bevelEnabled: false, curveSegments: 8 }),
-    element: new THREE.SphereGeometry(0.11, 40, 20, 0, Math.PI * 2, 0, 0.72),
-    sensor: new THREE.CircleGeometry(0.014, 20),
+    element: new THREE.SphereGeometry(0.11, 96, 48, 0, Math.PI * 2, 0, 0.72),
+    sensor: new THREE.CircleGeometry(0.0105, 64),
+    glint: new THREE.PlaneGeometry(0.059, 0.059),
     strut: new THREE.CylinderGeometry(0.012, 0.012, 1, 10),
   };
   return GEO;
@@ -87,10 +89,16 @@ export function buildEye(mats, info) {
   optics.add(barrel, knurl, ringA, ringB);
 
   const glowMat = mats.glowCyan.clone();
-  const glowBase = glowMat.color.clone();
+  const glowBase = new THREE.Color(0.08, 2.45, 4.2);
   const glow = new THREE.Mesh(G.glow, glowMat);
-  glow.position.z = -0.094;
+  glow.position.z = -0.057;
   optics.add(glow);
+  // A fine blue-violet fringe adds optical depth to the original cyan halo.
+  const edgeMat = new THREE.MeshBasicMaterial({ color: new THREE.Color(0.38, 0.45, 2.1) });
+  const edgeBase = edgeMat.color.clone();
+  const glowEdge = new THREE.Mesh(G.glowEdge, edgeMat);
+  glowEdge.position.z = -0.054;
+  optics.add(glowEdge);
 
   // iris blades
   const blades = [];
@@ -107,8 +115,10 @@ export function buildEye(mats, info) {
 
   // coated rear element + sensor glint
   const elementMat = new THREE.MeshPhysicalMaterial({
-    color: 0x04060a, roughness: 0.06, metalness: 0.2, clearcoat: 1, clearcoatRoughness: 0.03,
-    iridescence: 1, iridescenceIOR: 1.9, iridescenceThicknessRange: [220, 520],
+    color: 0x030810, roughness: 0.035, metalness: 0.2, clearcoat: 0.9, clearcoatRoughness: 0.025,
+    envMapIntensity: 0.72, specularIntensity: 0.8,
+    iridescence: 0.8, iridescenceIOR: 1.6,
+    iridescenceThicknessMinimum: 220, iridescenceThicknessMaximum: 480,
   });
   const element = new THREE.Mesh(G.element, elementMat);
   element.rotation.x = Math.PI / 2;
@@ -118,8 +128,42 @@ export function buildEye(mats, info) {
   sensor.position.z = -0.1145;
   optics.add(element, sensor);
 
+  // A small optical star, tucked behind the glass, follows the sensor's power.
+  // It adds a sharp glint while the circular pupil and glossy lens stay dominant.
+  const glintMat = new THREE.ShaderMaterial({
+    uniforms: { uPower: { value: 1 } },
+    // Include the glint in the glass transmission buffer, after solid optics.
+    blending: THREE.AdditiveBlending, depthWrite: false,
+    vertexShader: 'varying vec2 vUv; void main(){ vUv=uv; gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.0); }',
+    fragmentShader: /* glsl */ `
+      uniform float uPower;
+      varying vec2 vUv;
+      void main() {
+        vec2 p = (vUv - 0.5) * 2.0;
+        float h = exp(-abs(p.y) * 95.0 - abs(p.x) * 5.5);
+        float v = exp(-abs(p.x) * 120.0 - abs(p.y) * 8.0);
+        float edge = 1.0 - smoothstep(0.7, 1.0, length(p));
+        gl_FragColor = vec4(vec3(0.15, 0.8, 1.4), (h + v * 0.55) * edge * uPower * 0.5);
+      }
+    `,
+  });
+  const glint = new THREE.Mesh(G.glint, glintMat);
+  glint.renderOrder = 1;
+  glint.position.z = -0.114;
+  optics.add(glint);
+
   // the breakable front glass
-  const dome = new LensDome({ a: 0.134, h: 0.052, thickness: 0.011, material: mats.lens });
+  // Match the optical thickness to the actual cover, rather than refracting
+  // the iris through an 0.08-unit slab. Render its outward surface only.
+  const coverMat = mats.lens.clone();
+  coverMat.name = 'Clear optical eye cover';
+  coverMat.thickness = 0.011;
+  coverMat.ior = 1.46;
+  coverMat.roughness = 0.008;
+  coverMat.envMapIntensity = 0.78;
+  coverMat.specularIntensity = 0.72;
+  coverMat.side = THREE.FrontSide;
+  const dome = new LensDome({ a: 0.134, h: 0.052, thickness: 0.011, material: coverMat });
   dome.group.position.z = 0.012;
   optics.add(dome.group);
 
@@ -183,13 +227,15 @@ export function buildEye(mats, info) {
       for (const b of blades) b.piv.rotation.z = b.base + (1 - open) * 0.62;
 
       // glow: steady pulse, with electrical flicker when damaged
-      let p = eye.power * (0.86 + 0.14 * Math.sin(clock * 2.2 + info.side)) * (eye.hover ? 1.9 : 1);
+      let p = eye.power * (0.92 + 0.08 * Math.sin(clock * 2.2 + info.side)) * (eye.hover ? 1.35 : 1);
       if (eye.flicker > 0) {
         eye.flicker = Math.max(0, eye.flicker - dt);
         p *= Math.random() < 0.45 ? 0.08 : 1.5;
       }
       glowMat.color.copy(glowBase).multiplyScalar(p);
-      sensorMat.color.copy(glowBase).multiplyScalar(p * 1.3);
+      edgeMat.color.copy(edgeBase).multiplyScalar(p);
+      sensorMat.color.copy(glowBase).multiplyScalar(p * 1.1);
+      glintMat.uniforms.uPower.value = p;
     },
 
     /** Restore a destroyed eye. */

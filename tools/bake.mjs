@@ -39,7 +39,7 @@ const PARTS = {
   lowerRail: () => meshSdf(lowerRailSdf, { min: [-0.46, -0.99, 0.1], max: [0.46, -0.83, 0.88], h: 0.006, label: 'lowerRail' }),
 };
 for (const key of Object.keys(TOOTH_MESHES)) {
-  PARTS[`tooth_${key}`] = () => meshSdf(toothSdf(key), { ...toothBounds(key), h: 0.0034, label: `tooth_${key}` });
+  PARTS[`tooth_${key}`] = () => meshSdf(toothSdf(key), { ...toothBounds(key), h: 0.0028, label: `tooth_${key}` });
 }
 
 console.log('Baking head meshes...');

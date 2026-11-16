@@ -6,7 +6,7 @@ import {
 } from './sdf.js';
 import {
   SHELL_T, ORBIT, HINGE, TEETH, POLY, polyDist, toothRootCones,
-  TOOTH_TYPES, TOOTH_MESHES,
+  TOOTH_TYPES, TOOTH_MESHES, rootBend,
 } from './layout.js';
 
 const half = (arch) => TEETH.filter((t) => t.arch === arch && t.side > 0);
@@ -29,7 +29,10 @@ function cones(list, x, y, z) {
 function railHoles(teeth) {
   const out = [];
   for (const t of teeth) {
-    const rc = toothRootCones(t, 0.011);
+    // The full curved passage clears roots through the rail. Extend only the
+    // cervical segment towards the crown; bridging every segment would widen it.
+    out.push(...toothRootCones(t, 0.011));
+    const rc = toothRootCones(t, 0.011, true);
     for (const c of rc) {
       // extend the passage out through the biting side of the rail
       out.push([
@@ -209,44 +212,80 @@ export function lowerRailSdf(x, y, z) {
 }
 
 // ------------------------------------------------------------------ teeth
-function incisorCrown(x, y, z) {
+// Curved cross-sections keep softbox reflections flowing across the enamel.
+// A rounded box has a planar front, which made the incisors look like tiles.
+function crownSection(x, z, hx, hz, power = 2.5) {
+  const u = Math.abs(x) / hx, v = Math.abs(z) / hz;
+  const q = Math.pow(Math.pow(u, power) + Math.pow(v, power), 1 / power);
+  if (q < 1e-6) return -Math.min(hx, hz);
+  const grad = Math.hypot(Math.pow(u / q, power - 1) / hx, Math.pow(v / q, power - 1) / hz);
+  return (q - 1) / grad;
+}
+
+function incisorCrown(x, y, z, lateral = false, lower = false) {
   const t = clamp(y / 0.14, 0, 1);
-  const hx = 0.041 + 0.009 * smoothstep(0, 0.7, t);
-  const hz = mix(0.035, 0.0085, Math.pow(t, 0.85));
-  const zc = 0.012 * t - 0.004;
-  const dxz = sdRoundRect(x, z - zc, hx, hz, Math.min(hx, hz) * 0.9);
-  const dy = Math.abs(y - 0.058) - 0.082;
-  let d = smax(dxz, dy, 0.014);
-  d = smax(d, -sdEllipsoid(x, y, z, 0, 0.075, -0.058, 0.034, 0.055, 0.03), 0.012);
+  // Narrow cervical neck, full contact shoulders, softly rounded incisal corners.
+  const neck = lower ? 0.034 : 0.037;
+  const hx = neck + (0.052 - neck) * smoothstep(0, 0.62, t)
+    - (lateral ? 0.009 : 0.004) * smoothstep(0.7, 1, t);
+  const hz = (lower ? 0.029 : 0.034) + 0.004 * Math.sin(t * Math.PI)
+    - (lower ? 0.019 : 0.023) * Math.pow(t, 1.35);
+  const lobes = 0.0004 * Math.cos(x * 175) * Math.sin(t * Math.PI);
+  const zc = 0.001 + 0.005 * t + lobes;
+  const section = crownSection(x, z - zc, hx, hz, lateral ? 2.25 : 2.65);
+  const corner = Math.pow(clamp(Math.abs(x) / 0.052, 0, 1.5), 4);
+  const edge = 0.14 - (lateral ? 0.017 : 0.008) * corner
+    + 0.00065 * Math.cos(x * 190) - 0.0008 * x / 0.05;
+  let d = smax(section, Math.max(-0.019 - y, y - edge), 0.007);
+  // Shallow lingual fossa; the cervical bulge is left intact.
+  d = smax(d, -sdEllipsoid(x, y, z, 0, 0.079, -0.048, 0.033, 0.045, 0.029), 0.006);
   return d;
 }
 
 function canineCrown(x, y, z) {
-  const zz = z * 1.12;
-  let d = sdRoundCone(x, y, zz, 0, 0, 0, 0, 0.105, 0.004, 0.043, 0.03);
-  d = smin(d, sdRoundCone(x, y, zz, 0, 0.1, 0.004, 0, 0.15, 0, 0.028, 0.007), 0.02);
-  return d / 1.12;
+  const t = clamp(y / 0.155, 0, 1);
+  const hx = 0.033 + 0.014 * Math.sin(t * Math.PI * 0.94);
+  const hz = 0.034 + 0.006 * Math.sin(t * Math.PI) - 0.017 * t * t;
+  const ridge = 0.003 * Math.exp(-Math.pow(x / 0.017, 2)) * Math.sin(t * Math.PI);
+  const section = crownSection(x, z - 0.003 - ridge, hx, hz, 2.35);
+  // A broad shoulder and two unequal cusp slopes, rather than a cone/fang.
+  const cuspX = x - 0.004;
+  const roof = 0.155 - (Math.sqrt(cuspX * cuspX + 0.000012) - 0.00346)
+    * (cuspX < 0 ? 0.72 : 0.9);
+  let d = smax(section, Math.max(-0.02 - y, y - roof), 0.009);
+  d = smax(d, -sdEllipsoid(x, y, z, 0, 0.085, -0.052, 0.027, 0.046, 0.026), 0.006);
+  return d;
 }
 
+const cusp = (x, z, cx, cz, rx, rz, height) =>
+  height * Math.exp(-Math.pow((x - cx) / rx, 2) - Math.pow((z - cz) / rz, 2));
+
 function premolarCrown(x, y, z) {
-  let d = sdEllipsoid(x, y, z, 0, 0.05, 0, 0.046, 0.068, 0.052);
-  d = smax(d, y - 0.098, 0.02);
-  d = smin(d, sdSphere(x, y, z, 0, 0.092, 0.024, 0.027), 0.018);
-  d = smin(d, sdSphere(x, y, z, 0, 0.086, -0.025, 0.023), 0.018);
-  d = smax(d, -sdCapsule(x, y, z, -0.03, 0.119, 0, 0.03, 0.119, 0, 0.009), 0.008);
-  return d;
+  const t = clamp(y / 0.12, 0, 1);
+  const fullness = Math.sin(Math.PI * t * 0.84);
+  const section = crownSection(x, z, 0.033 + 0.012 * fullness, 0.036 + 0.017 * fullness, 2.45);
+  // Buccal and lingual cusps share one crown, with a continuous central saddle.
+  const fissure = z - 0.002 * Math.sin(x * 95);
+  const roof = 0.091 + cusp(x, z, -0.002, 0.025, 0.029, 0.022, 0.030)
+    + cusp(x, z, 0.003, -0.025, 0.027, 0.022, 0.024)
+    - 0.0035 * Math.exp(-Math.pow(fissure / 0.004, 2)) * Math.exp(-Math.pow(x / 0.031, 4));
+  return smax(section, Math.max(-0.022 - y, y - roof), 0.009);
 }
 
 function molarCrown(x, y, z) {
-  let d = sdRoundBox(x, y, z, 0, 0.045, 0, 0.0625, 0.058, 0.056, 0.032);
-  const sx = Math.abs(x), sz = Math.abs(z);
-  d = smin(d, sdSphere(sx, y, sz, 0.031, 0.092, 0.028, 0.027), 0.018);
-  d = smax(d, -sdEllipsoid(x, y, z, 0, 0.128, 0, 0.034, 0.02, 0.03), 0.012);
-  d = smax(d, -sdCapsule(x, y, z, -0.05, 0.116, 0, 0.05, 0.116, 0, 0.006), 0.008);
-  d = smax(d, -sdCapsule(x, y, z, 0, 0.116, -0.045, 0, 0.116, 0.045, 0.006), 0.008);
-  // groove down the cheek side between the cusps
-  d = smax(d, -sdCapsule(x, y, z, 0, 0.11, 0.06, 0, 0.04, 0.064, 0.007), 0.008);
-  return d;
+  const t = clamp(y / 0.115, 0, 1);
+  const fullness = Math.sin(Math.PI * t * 0.82);
+  const cheekGroove = 0.0015 * Math.exp(-Math.pow(x / 0.007, 2)) * smoothstep(0.4, 0.9, t);
+  const section = crownSection(x, z + cheekGroove, 0.045 + 0.018 * fullness, 0.040 + 0.016 * fullness, 2.8);
+  const gx = x - 0.003 * Math.sin(z * 90), gz = z - 0.003 * Math.sin(x * 80);
+  const grooves = Math.exp(-Math.pow(gx / 0.004, 2)) + Math.exp(-Math.pow(gz / 0.004, 2));
+  const roof = 0.086
+    + cusp(x, z, -0.029, 0.027, 0.024, 0.023, 0.029)
+    + cusp(x, z, 0.030, 0.025, 0.023, 0.023, 0.026)
+    + cusp(x, z, -0.028, -0.025, 0.024, 0.021, 0.025)
+    + cusp(x, z, 0.028, -0.026, 0.023, 0.022, 0.022)
+    - 0.0025 * grooves * Math.exp(-Math.pow(x / 0.05, 6) - Math.pow(z / 0.045, 6));
+  return smax(section, Math.max(-0.023 - y, y - roof), 0.01);
 }
 
 const CROWNS = { incisor: incisorCrown, canine: canineCrown, premolar: premolarCrown, molar: molarCrown };
@@ -255,12 +294,18 @@ const CROWNS = { incisor: incisorCrown, canine: canineCrown, premolar: premolarC
 export function toothSdf(meshKey) {
   const spec = TOOTH_MESHES[meshKey];
   const type = TOOTH_TYPES[spec.type];
-  const crown = CROWNS[spec.type];
+  const crown = spec.type === 'incisor'
+    ? (x, y, z) => incisorCrown(x, y, z, spec.lateral, meshKey === 'LI')
+    : CROWNS[spec.type];
   return (x, y, z) => {
     let roots = 1e9;
     for (const r of type.roots) {
       const len = spec.rootLen * r.k;
-      const v = sdRoundCone(x, y, z, r.x0, 0.005, 0, r.x1, -len, r.z1, r.r0, r.r1);
+      const t = clamp((0.005 - y) / (len + 0.005), 0, 1);
+      const bend = rootBend(t);
+      const fullness = (r.r0 - r.r1) * (t - Math.pow(t, 1.18));
+      const v = sdRoundCone(x - r.bendX * bend, y, z - r.bendZ * bend,
+        r.x0, 0.005, 0, r.x1, -len, r.z1, r.r0, r.r1) - fullness;
       roots = roots > 1e8 ? v : smin(roots, v, 0.014);
     }
     return smin(crown(x, y, z), roots, 0.016);

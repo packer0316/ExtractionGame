@@ -3,6 +3,7 @@ import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
 import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
+import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { FLOOR_Y } from '../model/layout.js';
 import { ease } from '../util/anim.js';
@@ -75,7 +76,8 @@ export function createStage(canvas) {
   renderer.toneMappingExposure = 0.95;
   renderer.shadowMap.enabled = true;
   renderer.shadowMap.type = THREE.PCFSoftShadowMap;
-  renderer.transmissionResolutionScale = 0.75;
+  // Optical eyes are seen through glass: preserve the iris at render resolution.
+  renderer.transmissionResolutionScale = 1;
 
   const scene = new THREE.Scene();
   scene.environment = buildEnvironment(renderer);
@@ -151,9 +153,56 @@ export function createStage(canvas) {
   const target = new THREE.WebGLRenderTarget(1, 1, { type: THREE.HalfFloatType, samples: 4 });
   const composer = new EffectComposer(renderer, target);
   composer.addPass(new RenderPass(scene, camera));
-  const bloom = new UnrealBloomPass(new THREE.Vector2(1, 1), 0.2, 0.55, 1.5);
+  const BLOOM_BASE = 0.2;
+  const bloom = new UnrealBloomPass(new THREE.Vector2(1, 1), BLOOM_BASE, 0.55, 1.5);
   composer.addPass(bloom);
+  // "Punch": screen-space impact effects for the big moments. A zoom blur and
+  // colour fringing around a focus point, a ripple that travels outwards, and
+  // a dimming of everything away from the focus. Skipped entirely when idle.
+  const punch = new ShaderPass({
+    uniforms: {
+      tDiffuse: { value: null }, uCenter: { value: new THREE.Vector2(0.5, 0.5) }, uAspect: { value: 1 },
+      uZoom: { value: 0 }, uChroma: { value: 0 }, uDim: { value: 0 }, uWave: { value: 0 }, uWaveAmp: { value: 0 },
+      uFlash: { value: new THREE.Vector3() },
+    },
+    vertexShader: 'varying vec2 vUv; void main(){ vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }',
+    fragmentShader: /* glsl */ `
+      uniform sampler2D tDiffuse; uniform vec2 uCenter; uniform float uAspect;
+      uniform float uZoom, uChroma, uDim, uWave, uWaveAmp; uniform vec3 uFlash;
+      varying vec2 vUv;
+      void main() {
+        vec2 dir = vUv - uCenter;
+        float dist = length(dir * vec2(uAspect, 1.0));
+        // ripple: pixels on the travelling ring are pushed outwards
+        float band = dist - uWave;
+        float ripple = exp(-band * band * 520.0) * uWaveAmp;
+        vec2 uv = vUv - normalize(dir + 1e-5) * ripple * 0.03;
+        vec2 d2 = uv - uCenter;
+        vec3 col = vec3(0.0);
+        for (int i = 0; i < 8; i++) {
+          float t = float(i) / 7.0;
+          vec2 o = d2 * (uZoom * 0.14 * t);
+          vec2 f = d2 * (uChroma * 0.022) * (0.4 + t);
+          col.r += texture2D(tDiffuse, uv - o - f).r;
+          col.g += texture2D(tDiffuse, uv - o).g;
+          col.b += texture2D(tDiffuse, uv - o + f).b;
+        }
+        col /= 8.0;
+        col *= 1.0 - uDim * smoothstep(0.16, 0.85, dist);
+        col += vec3(1.0, 0.86, 0.6) * ripple * 0.22;
+        col += uFlash;
+        gl_FragColor = vec4(col, 1.0);
+      }`,
+  });
+  punch.enabled = false;
+  composer.addPass(punch);
   composer.addPass(new OutputPass());
+  const fxState = { zoom: 0, chroma: 0, dim: 0, dimTarget: 0, wave: 2, waveAmp: 0, flash: 0, flashColor: new THREE.Vector3(1, 1, 1), bloom: BLOOM_BASE, bloomTarget: BLOOM_BASE };
+  const ndc = new THREE.Vector3();
+  const focus = (worldPos) => {
+    ndc.copy(worldPos).project(camera);
+    punch.uniforms.uCenter.value.set(ndc.x * 0.5 + 0.5, ndc.y * 0.5 + 0.5);
+  };
 
   function resize() {
     const w = canvas.clientWidth || window.innerWidth;
@@ -166,6 +215,7 @@ export function createStage(canvas) {
     // keep the whole head in frame on tall screens
     camera.fov = w / h < 1 ? 28 + (1 - w / h) * 22 : 28;
     camera.updateProjectionMatrix();
+    punch.uniforms.uAspect.value = w / h;
   }
   window.addEventListener('resize', resize);
   resize();
@@ -194,6 +244,35 @@ export function createStage(canvas) {
     },
     releaseCamera() { controls.enabled = true; },
 
+    /** A jolt of zoom blur and colour fringing centred on a world position. */
+    impact(worldPos, { zoom = 0.6, chroma = 0.8 } = {}) {
+      focus(worldPos);
+      fxState.zoom = Math.max(fxState.zoom, zoom);
+      fxState.chroma = Math.max(fxState.chroma, chroma);
+    },
+    /** A ripple spreading across the screen from a world position. */
+    shockwave(worldPos, amp = 1) {
+      focus(worldPos);
+      fxState.wave = 0;
+      fxState.waveAmp = amp;
+    },
+    /** Darken everything away from a world position (0 turns it off). */
+    spotlight(worldPos, amount) {
+      if (worldPos) focus(worldPos);
+      fxState.dimTarget = amount;
+    },
+    /** Brief full-screen wash of light. */
+    flash(amount = 0.5, color = [1, 0.92, 0.75]) {
+      fxState.flash = Math.max(fxState.flash, amount);
+      fxState.flashColor.set(color[0], color[1], color[2]);
+    },
+    /** Extra bloom while something glorious is on screen (0 = normal). */
+    glow(extra) { fxState.bloomTarget = BLOOM_BASE + extra; },
+    /** Drop every screen effect at once. */
+    calm() {
+      fxState.dimTarget = 0; fxState.bloomTarget = BLOOM_BASE; fxState.zoom = 0; fxState.chroma = 0; fxState.waveAmp = 0; fxState.flash = 0;
+    },
+
     update(dt) {
       if (fly) {
         fly.t += dt;
@@ -207,6 +286,24 @@ export function createStage(canvas) {
       }
       shakeAmp *= Math.exp(-dt * 9);
       if (shakeAmp < 0.0004) shakeAmp = 0;
+
+      // screen effects decay on their own
+      const s = fxState, u = punch.uniforms;
+      s.zoom *= Math.exp(-dt * 7);
+      s.chroma *= Math.exp(-dt * 5);
+      s.flash *= Math.exp(-dt * 6);
+      s.dim += (s.dimTarget - s.dim) * (1 - Math.exp(-dt * 6));
+      s.wave += dt * 1.5;
+      s.waveAmp *= Math.exp(-dt * 2.2);
+      s.bloom += (s.bloomTarget - s.bloom) * (1 - Math.exp(-dt * 5));
+      bloom.strength = s.bloom;
+      const active = s.zoom > 0.004 || s.chroma > 0.004 || s.dim > 0.004 || s.flash > 0.004 || (s.waveAmp > 0.01 && s.wave < 1.8);
+      punch.enabled = active;
+      if (active) {
+        u.uZoom.value = s.zoom; u.uChroma.value = s.chroma; u.uDim.value = s.dim;
+        u.uWave.value = s.wave; u.uWaveAmp.value = s.wave < 1.8 ? s.waveAmp : 0;
+        u.uFlash.value.copy(s.flashColor).multiplyScalar(s.flash);
+      }
     },
 
     render() {

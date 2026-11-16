@@ -50,6 +50,9 @@ for (let i = 0; i < outs.length; i++) {
     const seq = get('seq');
     if (seq) {
       // --seq "200,600,1200": screenshots at these ms after the eval starts
+      // --until "js expr": start that clock only once the expression is true
+      const until = get('until');
+      if (until) await page.waitForFunction(until, { timeout: 90000, polling: 50 }).catch(() => console.log('until: timed out'));
       const t0 = Date.now();
       let n = 0;
       for (const ms of seq.split(',').map(Number)) {

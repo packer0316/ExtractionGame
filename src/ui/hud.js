@@ -1,4 +1,4 @@
-import { ZONES, BET_STEPS } from '../game/paytable.js';
+import { ZONES, BET_STEPS, SHOWCASE } from '../game/paytable.js';
 import { TEETH, EYES } from '../model/layout.js';
 
 const fmt = (n) => (Number.isInteger(n) ? n.toLocaleString('en-US') : n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }));
@@ -56,7 +56,9 @@ export function createHud(root, { game, onPlay, onHover, onNewHead, onTurbo, onM
     pay.append(row);
     rows[key] = row;
   }
-  pay.append(h('div', 'panel-note', `理論返還率 RTP ≈ ${(ZONE_ORDER.reduce((a, k) => a + ZONES[k].rtp, 0) / ZONE_ORDER.length * 100).toFixed(1)}%`));
+  pay.append(h('div', 'panel-note', SHOWCASE
+    ? '特效展示模式 · 高倍率加權，不計返還率'
+    : `理論返還率 RTP ≈ ${(ZONE_ORDER.reduce((a, k) => a + ZONES[k].rtp, 0) / ZONE_ORDER.length * 100).toFixed(1)}%`));
 
   // ------------------------------------------------------------ chart
   const chart = h('aside', 'panel chart');
@@ -121,7 +123,13 @@ export function createHud(root, { game, onPlay, onHover, onNewHead, onTurbo, onM
   const tip = h('div', 'tip');
   const pops = h('div', 'pops');
   const banner = h('div', 'banner');
-  root.append(top, pay, chart, bottom, tip, pops, banner);
+  // the prize ladder shown while a tooth is being pulled
+  const ladder = h('div', 'ladder');
+  ladder.innerHTML = '<div class="ladder-head"><span class="ladder-zone"></span><span class="ladder-hint">越難拔，獎越大</span></div><div class="ladder-cells"></div><div class="ladder-now"><span class="ladder-mult">×0</span><b class="ladder-win">+0</b></div>';
+  const ladderCells = ladder.querySelector('.ladder-cells');
+  const ladderMult = ladder.querySelector('.ladder-mult');
+  const ladderWin = ladder.querySelector('.ladder-win');
+  root.append(top, pay, chart, bottom, tip, pops, ladder, banner);
 
   // ------------------------------------------------------------ wiring
   const stop = (el) => ['pointerdown', 'pointerup', 'click', 'wheel'].forEach((ev) => el.addEventListener(ev, (e) => e.stopPropagation()));
@@ -216,13 +224,95 @@ export function createHud(root, { game, onPlay, onHover, onNewHead, onTurbo, onM
       el.style.top = `${y}px`;
       pops.append(el);
       setTimeout(() => el.remove(), 2600);
-      if (outcome.tier === 'big' || outcome.tier === 'mega') {
-        banner.innerHTML = `<span>${outcome.tier === 'mega' ? 'MEGA WIN' : 'BIG WIN'}</span><b>+${fmt(outcome.win)}</b>`;
-        banner.className = `banner show ${outcome.tier}`;
-        setTimeout(() => { banner.className = 'banner'; }, 2400);
-      }
+    },
+
+    /** A small marker that floats up from the tooth each time the prize climbs. */
+    tick(x, y, mult) {
+      const el = h('div', 'tick', fmtMult(mult));
+      el.style.left = x + 'px';
+      el.style.top = y + 'px';
+      pops.append(el);
+      setTimeout(() => el.remove(), 950);
+    },
+
+    /** Big headline with the amount counting up. cls: 'big' | 'mega' | 'jackpot' */
+    banner(label, amount, cls, mult) {
+      clearTimeout(bannerTimer);
+      cancelAnimationFrame(bannerAnim);
+      banner.innerHTML = `<span>${label}</span><i>${fmtMult(mult)}</i><b>+0</b>`;
+      banner.className = `banner show ${cls}`;
+      const b = banner.querySelector('b');
+      const dur = cls === 'big' ? 1100 : cls === 'mega' ? 1900 : 2600;
+      const t0 = performance.now();
+      const tick = (now) => {
+        const k = Math.min((now - t0) / dur, 1);
+        b.textContent = `+${fmt(Math.round(amount * (1 - Math.pow(1 - k, 2.2)) * 100) / 100)}`;
+        if (k < 1) bannerAnim = requestAnimationFrame(tick); else { b.textContent = `+${fmt(amount)}`; b.classList.add('done'); }
+      };
+      bannerAnim = requestAnimationFrame(tick);
+      bannerTimer = setTimeout(() => { banner.className = 'banner'; }, dur + 1500);
+    },
+
+    /** Prize ladder for the tooth being pulled. */
+    ladder: {
+      /** Lay out every prize this zone can pay, all unlit. */
+      show(zoneKey, bet) {
+        const z = ZONES[zoneKey];
+        ladderState.bet = bet; ladderState.win = 0;
+        ladderState.mults = z.odds.filter((o) => o.mult > 0).map((o) => o.mult);
+        ladder.querySelector('.ladder-zone').textContent = z.name;
+        ladderCells.innerHTML = ladderState.mults.map((m) => `<span class="cell">${fmtMult(m)}</span>`).join('');
+        ladderMult.textContent = '×0';
+        ladderWin.textContent = '+0';
+        ladder.className = 'ladder show';
+        ladder.dataset.heat = '0';
+      },
+      /** The next prize up starts to pulse: will the tooth hold once more? */
+      tease(i) {
+        [...ladderCells.children].forEach((c, k) => c.classList.toggle('tease', k === i));
+      },
+      /** The tooth held: prize `i` is now lit and the running win jumps. */
+      step(i, mult) {
+        const cells = [...ladderCells.children];
+        // forced test values may not be on the zone's ladder
+        if (cells[i] && cells[i].textContent !== fmtMult(mult)) cells[i].textContent = fmtMult(mult);
+        cells.forEach((c, k) => {
+          c.classList.remove('tease');
+          c.classList.toggle('on', k <= i);
+          c.classList.toggle('now', k === i);
+        });
+        ladder.dataset.heat = String(Math.min(4, Math.floor((i / Math.max(1, cells.length - 1)) * 4.99)));
+        ladderMult.textContent = fmtMult(mult);
+        ladder.classList.remove('punch', 'slip');
+        void ladder.offsetWidth;
+        ladder.classList.add('punch');
+        const from = ladderState.win, to = Math.round(ladderState.bet * mult * 100) / 100, t0 = performance.now();
+        ladderState.win = to;
+        cancelAnimationFrame(ladderAnim);
+        const tick = (now) => {
+          const k = Math.min((now - t0) / 320, 1);
+          ladderWin.textContent = `+${fmt(Math.round((from + (to - from) * (1 - Math.pow(1 - k, 3))) * 100) / 100)}`;
+          if (k < 1) ladderAnim = requestAnimationFrame(tick);
+        };
+        ladderAnim = requestAnimationFrame(tick);
+      },
+      /** The forceps slipped: the whole ladder rattles. */
+      slip() {
+        ladder.classList.remove('slip');
+        void ladder.offsetWidth;
+        ladder.classList.add('slip');
+      },
+      /** The tooth is out: whatever is lit is the prize. */
+      lock(mult) {
+        [...ladderCells.children].forEach((c) => c.classList.remove('tease'));
+        ladder.classList.add(mult > 0 ? 'locked' : 'dud');
+        if (!(mult > 0)) { ladderMult.textContent = '×0'; ladderWin.textContent = '落空'; }
+      },
+      hide() { ladder.classList.remove('show'); },
     },
   };
+  let bannerTimer = 0, bannerAnim = 0, ladderAnim = 0;
+  const ladderState = { bet: 0, win: 0, mults: [] };
   hud.setMessage('');
   return hud;
 }

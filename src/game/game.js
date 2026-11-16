@@ -2,20 +2,21 @@ import { ZONES, BET_STEPS, START_BALANCE, draw, tierOf } from './paytable.js';
 
 const STORE_KEY = 'extraction.wallet.v1';
 
-function loadWallet() {
+// Only the chosen bet size is remembered between visits. The chips are not:
+// every time the game is opened the balance starts again from START_BALANCE.
+function loadBetIndex() {
   try {
     const raw = JSON.parse(localStorage.getItem(STORE_KEY));
-    if (raw && Number.isFinite(raw.balance)) return raw;
-  } catch { /* storage unavailable: play with a fresh wallet */ }
-  return null;
+    if (raw && BET_STEPS[raw.betIndex]) return raw.betIndex;
+  } catch { /* storage unavailable: use the default bet */ }
+  return 3;
 }
 
 /** Money and round bookkeeping. Knows nothing about rendering. */
 export function createGame(targetIds) {
-  const saved = loadWallet();
   const state = {
-    balance: saved ? saved.balance : START_BALANCE,
-    betIndex: saved && BET_STEPS[saved.betIndex] ? saved.betIndex : 3,
+    balance: START_BALANCE,
+    betIndex: loadBetIndex(),
     busy: false,
     round: 1,
     results: new Map(), // targetId -> { mult, win, bet, tier }
@@ -26,7 +27,7 @@ export function createGame(targetIds) {
   };
   const listeners = new Set();
   const changed = () => {
-    try { localStorage.setItem(STORE_KEY, JSON.stringify({ balance: state.balance, betIndex: state.betIndex })); } catch { /* ignore */ }
+    try { localStorage.setItem(STORE_KEY, JSON.stringify({ betIndex: state.betIndex })); } catch { /* ignore */ }
     listeners.forEach((fn) => fn(state));
   };
 

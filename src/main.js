@@ -4,6 +4,7 @@ import { createHead } from './model/head.js';
 import { Animator } from './util/anim.js';
 import { Debris } from './fx/debris.js';
 import { createParticles } from './fx/particles.js';
+import { createAwardFx } from './fx/award.js';
 import { createSfx } from './audio/sfx.js';
 import { createHammer, createForceps } from './tools/tools.js';
 import { createActions } from './game/actions.js';
@@ -28,7 +29,8 @@ async function boot() {
   const fx = createParticles(stage.scene);
   const hammer = createHammer(head.mats);
   const forceps = createForceps(head.mats);
-  const actions = createActions({ stage, head, anim, real, time, debris, fx, sfx, hammer, forceps });
+  const award = createAwardFx(stage.scene, stage.camera);
+  const actions = createActions({ stage, head, anim, real, time, debris, fx, award, sfx, hammer, forceps });
   const game = createGame([...head.targets.keys()]);
 
   // ------------------------------------------------------------ debug switches
@@ -113,25 +115,53 @@ async function boot() {
     const outcome = game.place(id, t.zone, force);
     sfx.bet();
     hud.setMessage(`${targetLabel(id)} — 下注 ${outcome.bet}`, 'good');
-    const onReveal = (worldPos) => {
+    const toScreen = (worldPos) => {
       screenPos.copy(worldPos).project(stage.camera);
-      const x = (screenPos.x * 0.5 + 0.5) * window.innerWidth;
-      const y = (-screenPos.y * 0.5 + 0.5) * window.innerHeight;
-      outcome.shown = true;
-      game.settle(outcome);
-      hud.pop(x, Math.max(y - 86, 170), outcome); // sit above the target, not on it
-      hud.setMessage(
-        outcome.mult > 0 ? `${targetLabel(id)} 返還 ×${outcome.mult} — 贏得 ${outcome.win}` : `${targetLabel(id)} 落空`,
-        outcome.mult >= 1 ? 'good' : '',
-      );
+      return [(screenPos.x * 0.5 + 0.5) * window.innerWidth, (-screenPos.y * 0.5 + 0.5) * window.innerHeight];
+    };
+    // what the action reports back while it plays
+    const ui = {
+      onLadder: (zone, bet) => hud.ladder.show(zone, bet),
+      onTease: (i) => hud.ladder.tease(i),
+      onStep: (i, mult, worldPos) => {
+        hud.ladder.step(i, mult);
+        const [x, y] = toScreen(worldPos);
+        hud.tick(x, y, mult);
+        hud.setMessage(`撐住了！獎金升到 ×${mult}`, 'good');
+      },
+      onSlip: () => { hud.ladder.slip(); hud.setMessage('鉗子打滑！重新夾緊…', 'warn'); },
+      onLock: (mult) => hud.ladder.lock(mult),
+      onReveal: (worldPos) => {
+        const [x, y] = toScreen(worldPos);
+        outcome.shown = true;
+        game.settle(outcome);
+        if (outcome.tier === 'big' || outcome.tier === 'mega') {
+          // a big win gets the headline instead of the small floating label
+          hud.ladder.hide();
+          const jackpot = outcome.mult >= 50;
+          hud.banner(jackpot ? 'JACKPOT' : outcome.tier === 'mega' ? 'MEGA WIN' : 'BIG WIN', outcome.win, jackpot ? 'jackpot' : outcome.tier, outcome.mult);
+        } else {
+          hud.pop(x, Math.max(y - 86, 170), outcome); // sit above the target, not on it
+        }
+        hud.setMessage(
+          outcome.mult > 0 ? `${targetLabel(id)} 返還 ×${outcome.mult} — 贏得 ${outcome.win}` : `${targetLabel(id)} 落空`,
+          outcome.mult >= 1 ? 'good' : '',
+        );
+      },
+      onDone: () => hud.ladder.hide(),
     };
     try {
-      if (t.kind === 'eye') await actions.smashEye(t, outcome, onReveal);
-      else await actions.extractTooth(t, outcome, onReveal);
+      if (t.kind === 'eye') await actions.smashEye(t, outcome, ui);
+      else await actions.extractTooth(t, outcome, ui);
     } catch (err) {
       console.error(err);
-      if (!outcome.shown) onReveal(head.worldPos(id)); // never leave a stake unsettled
+      if (!outcome.shown) ui.onReveal(head.worldPos(id)); // never leave a stake unsettled
+      // and never leave the show running
+      time.warp = 1;
+      stage.calm();
+      award.clear();
     }
+    hud.ladder.hide();
     t.alive = false;
     game.setBusy(false);
     if (game.remaining === 0) {
@@ -207,6 +237,7 @@ async function boot() {
     head.update(dt);
     debris.update(dt);
     fx.update(dt);
+    award.update(dt);
     actions.update(dt);
     stage.update(raw);
     stage.render();
@@ -228,7 +259,7 @@ async function boot() {
     }
     requestAnimationFrame(frame);
   }
-  window.__game = { stage, head, anim, real, time, game, actions, play, newHead, hud, fx, debris, THREE, ZONES };
+  window.__game = { stage, head, anim, real, time, game, actions, play, newHead, hud, fx, award, debris, THREE, ZONES };
   frame();
 }
 

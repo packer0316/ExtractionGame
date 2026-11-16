@@ -2,12 +2,28 @@ import * as THREE from 'three';
 import { ease, rand, lerp } from '../util/anim.js';
 import { FLOOR_Y } from '../model/layout.js';
 import { FlexTube } from '../model/geom.js';
+import { ZONES } from './paytable.js';
+import { createAura, createBeam } from '../fx/award.js';
 
 const V = (x = 0, y = 0, z = 0) => new THREE.Vector3(x, y, z);
 const WORLD_UP = V(0, 1, 0);
 const WORLD_FRONT = V(0, 0, 1);
 const GRIP_THICKNESS = { incisor: 0.05, canine: 0.07, premolar: 0.095, molar: 0.11 };
 const TIER_GLOW = { small: 0x8a6a2a, win: 0xffc04a, big: 0xffd76a, mega: 0xfff0a8 };
+// how hard the moment a tooth lets go should land, by size of the win
+const TIER_POWER = { dud: 0.45, small: 0.75, win: 1, big: 1.45, mega: 2 };
+const GOLD = new THREE.Color(0xffc95e);
+
+const smooth = (a, b, x) => { const t = Math.min(1, Math.max(0, (x - a) / (b - a))); return t * t * (3 - 2 * t); };
+/** How "charged" a prize looks, 0..1: x1 is a faint glow, x5 clearly gold, x20 and up prismatic. */
+const chargeOf = (mult) => Math.min(1, Math.log(mult + 1) / Math.log(51));
+
+/** The prizes a tooth passes on its way up to `mult`: one per round it survives. */
+function stepsFor(zone, mult) {
+  const steps = ZONES[zone].table.map(([m]) => m).filter((m) => m > 0 && m <= mult);
+  if (mult > 0 && steps[steps.length - 1] !== mult) steps.push(mult);
+  return steps;
+}
 
 function basisQuat(x, y, z) {
   return new THREE.Quaternion().setFromRotationMatrix(new THREE.Matrix4().makeBasis(x, y, z));
@@ -18,9 +34,10 @@ function basisQuat(x, y, z) {
  * rebuild. `anim` runs on world time (it slows down in slow motion), `real`
  * on wall-clock time; `time.warp` scales world time.
  */
-export function createActions({ stage, head, anim, real, time, debris, fx, sfx, hammer, forceps }) {
+export function createActions({ stage, head, anim, real, time, debris, fx, award, sfx, hammer, forceps }) {
   const scene = stage.scene;
   scene.add(hammer.group, forceps.group);
+  const auras = new Set(); // glowing skins currently alive (their clocks need ticking)
 
   const nerve = new FlexTube(new THREE.MeshStandardMaterial({ color: 0xb3161b, roughness: 0.4, emissive: 0x3a0406 }), {
     radius: 0.007, segments: 14, radial: 6,
@@ -74,7 +91,7 @@ export function createActions({ stage, head, anim, real, time, debris, fx, sfx, 
     }
   }
 
-  async function smashEye(t, outcome, onReveal) {
+  async function smashEye(t, outcome, ui) {
     const eye = t.eye, side = t.info.side, dome = eye.dome;
     saveCam();
     takeHead({ yaw: -side * 0.13, pitch: -0.03 });
@@ -184,10 +201,21 @@ export function createActions({ stage, head, anim, real, time, debris, fx, sfx, 
     await real.wait(0.95);
     // ---- the payoff comes out of the broken socket
     const socket = eye.group.getWorldPosition(V());
-    await reveal(outcome, socket, N, onReveal);
+    await reveal(outcome, socket, N, ui.onReveal, null, eye.group);
     await real.wait(outcome.tier === 'dud' ? 0.55 : 0.9);
+    settleDown();
     freeHead();
     await restoreCam();
+  }
+
+  /** Put every escalating effect back to rest. */
+  function settleDown() {
+    stage.calm();
+    award.burstOff();
+    award.arcs(null, 0);
+    time.warp = 1;
+    const p0 = head.mech.power;
+    real.tween(0.6, (k) => { head.mech.power = lerp(p0, 1, k); });
   }
 
   // ====================================================================== TOOTH
@@ -201,8 +229,15 @@ export function createActions({ stage, head, anim, real, time, debris, fx, sfx, 
     t.holder.position.copy(_o).applyQuaternion(t.home.quat).add(t.home.pos);
   }
 
-  async function extractTooth(t, outcome, onReveal) {
+  async function extractTooth(t, outcome, ui) {
     const info = t.info, upper = info.arch === 'U';
+    // The result is already decided; the struggle is how it gets told. A tooth
+    // that is worth more holds on through more hauls, and the prize on screen
+    // climbs one step each time it does.
+    const steps = stepsFor(info.zone, outcome.mult);
+    const span = Math.max(1, ZONES[info.zone].table.filter(([m]) => m > 0).length - 1);
+    const power = TIER_POWER[outcome.tier] || 1;
+    const grand = outcome.tier === 'big' || outcome.tier === 'mega';
     saveCam();
     takeHead({
       yaw: -Math.atan2(info.zAxis[0], info.zAxis[2]) * 0.42,
@@ -223,7 +258,8 @@ export function createActions({ stage, head, anim, real, time, debris, fx, sfx, 
     const lateral = tX.x * info.side >= 0 ? 1 : -1;
     const viewDir = tZ.clone().multiplyScalar(0.7).addScaledVector(WORLD_FRONT, 0.6)
       .addScaledVector(tX, lateral * info.side * 0.5).addScaledVector(WORLD_UP, upper ? -0.2 : 0.3).normalize();
-    stage.flyTo(grip.clone().addScaledVector(viewDir, 3.2), grip.clone().addScaledVector(tY, 0.12), 0.7);
+    const camPos = grip.clone().addScaledVector(viewDir, 3.2), camTarget = grip.clone().addScaledVector(tY, 0.12);
+    stage.flyTo(camPos, camTarget, 0.7);
 
     // forceps frame: along the tooth, leaning out of the mouth
     const outDir = tZ.clone().multiplyScalar(0.55).addScaledVector(WORLD_FRONT, 0.62).normalize();
@@ -244,33 +280,190 @@ export function createActions({ stage, head, anim, real, time, debris, fx, sfx, 
     sfx.click();
     stage.shake(0.006);
     t.holder.attach(tool); // the tool now rides on the tooth
+    ui.onLadder(info.zone, outcome.bet);
 
-    // ---- work it loose
+    // a glowing skin over the tooth: heat while it resists, light once it has won
+    const mat = t.mesh.material;
+    if (!t.matOrig) t.matOrig = { color: mat.color.clone(), metalness: mat.metalness, roughness: mat.roughness };
+    if (t.aura) { auras.delete(t.aura); t.aura.dispose(); }
+    const aura = createAura(t.mesh.geometry);
+    t.mesh.add(aura.mesh);
+    t.aura = aura;
+    auras.add(aura);
+    // light pours out of the socket as the prize grows
+    const beam = createBeam();
+    t.seat.add(beam.mesh);
+    t.beam = beam;
+    auras.add(beam);
+
+    // How the tooth itself looks, from plain enamel to full treasure. It is
+    // raised a notch every time the prize steps up, so the tooth turns to
+    // gold, starts to shimmer and finally breaks into rainbow light while it
+    // is still being fought for, not only once it is out.
+    const look = { gold: 0, shimmer: 0, prism: 0, glint: 0, beam: 0 };
+    const applyLook = () => {
+      mat.color.copy(t.matOrig.color).lerp(GOLD, look.gold);
+      mat.metalness = lerp(t.matOrig.metalness, 1, look.gold);
+      mat.roughness = lerp(t.matOrig.roughness, 0.2, look.gold);
+      aura.uniforms.uAward.value = look.shimmer;
+      aura.uniforms.uPrism.value = look.prism;
+      aura.uniforms.uGlint.value = look.glint;
+      beam.uniforms.uPower.value = look.beam;
+      beam.uniforms.uPrism.value = look.prism;
+      beam.mesh.scale.set(1 + look.beam * 0.6, 0.45 + look.beam * 1.1, 1 + look.beam * 0.6);
+    };
+    applyLook();
+    const raiseLook = (mult) => {
+      const c = chargeOf(mult);
+      const from = { ...look };
+      const to = {
+        gold: smooth(0.1, 0.6, c) * 0.95,
+        shimmer: 0.12 + smooth(0.05, 0.55, c) * 0.8,
+        prism: smooth(0.7, 0.86, c),
+        glint: smooth(0.38, 0.9, c),
+        beam: smooth(0.25, 0.9, c) * 0.9,
+      };
+      real.tween(0.28, (k) => { for (const key in look) look[key] = lerp(from[key], to[key], k); applyLook(); }, ease.outCubic);
+      aura.uniforms.uPulse.value = 1;
+      return c;
+    };
+
     const socket = t.seat.getWorldPosition(V());
-    const AMPS = [0.07, -0.09, 0.11, -0.13, 0.15, -0.1];
-    let tilt = 0, lift = 0;
-    for (let i = 0; i < AMPS.length; i++) {
-      const a0 = tilt, a1 = AMPS[i], l0 = lift, l1 = lift + 0.005 + i * 0.0012;
-      const power = 0.5 + i * 0.1;
-      sfx.creak(power);
-      await anim.tween(0.2 - i * 0.012, (k) => poseTooth(t, lerp(a0, a1, k), lerp(l0, l1, k), Math.sin(k * Math.PI) * 0.05 * (i % 2 ? -1 : 1)), ease.inOutQuad);
-      tilt = a1; lift = l1;
-      head.kick({ roll: (i % 2 ? 1 : -1) * 0.35 * power * info.side, pitch: (upper ? 1 : -1) * 0.25 * power, y: (upper ? -1 : 1) * 0.25 * power });
+    const drag = upper ? 1 : -1; // which way the head gets hauled
+    let tilt = 0, lift = 0, heat = 0;
+
+    /** Rock the tooth sideways once. */
+    const rock = async (amp, dur, force) => {
+      const a0 = tilt, l0 = lift, l1 = lift + 0.004;
+      sfx.creak(force);
+      await anim.tween(dur, (k) => poseTooth(t, lerp(a0, amp, k), lerp(l0, l1, k), Math.sin(k * Math.PI) * 0.05 * Math.sign(amp)), ease.inOutQuad);
+      tilt = amp; lift = l1;
+      head.kick({ roll: Math.sign(amp) * 0.35 * force * info.side, pitch: drag * 0.25 * force, y: -drag * 0.25 * force });
       head.mech.spin += 0.8;
       t.seat.getWorldPosition(socket);
-      fx.sparks.emit(socket, { count: 3 + i, speed: 1.2, dir: tY, spread: 1, color: [3, 1.9, 0.6], life: 0.3 });
-      if (i === 3) fx.puffs.emit(socket, { count: 2, color: 0xd8cdb8, size: [0.04, 0.2], life: 0.5, alpha: 0.25, dir: tY, speed: 0.3 });
+      fx.sparks.emit(socket, { count: 3 + Math.round(force * 4), speed: 1.2, dir: tY, spread: 1, color: [3, 1.9, 0.6], life: 0.3 });
+    };
+
+    /** One haul on the forceps. Unless it is the last, the tooth holds and snaps back. */
+    const heave = async (level, last) => {
+      const dur = 0.44 + level * 0.3;
+      const stretch = 0.03 + level * 0.032;
+      const a0 = tilt, l0 = lift;
+      const pull = drag * (0.035 + 0.05 * level);
+      sfx.tension(dur, level);
+      head.pose.pitch.target += pull;
+      stage.flyTo(camPos.clone().lerp(grip, Math.min(0.05 + 0.26 * level, 0.3)), camTarget, dur, ease.outQuad);
+      await anim.tween(dur, (k) => {
+        const kk = k * k;
+        const tremble = Math.sin(k * (46 + level * 70)) * (0.004 + 0.013 * level) * kk;
+        poseTooth(t, lerp(a0, 0, Math.min(k * 2.5, 1)) + tremble, l0 + stretch * ease.outCubic(k), Math.sin(k * 38) * 0.03 * level * kk);
+        // the arms spring open a hair under the load
+        forceps.setOpen(pinch + 0.04 * level * kk * (0.5 + 0.5 * Math.sin(k * 95)));
+        aura.uniforms.uHeat.value = Math.min(1, heat + (0.12 + 0.2 * level) * kk);
+        // its light strains towards the next notch, and sparkles gather round it
+        aura.uniforms.uAward.value = look.shimmer + 0.22 * kk * (0.5 + 0.5 * Math.sin(k * 60));
+        if (look.glint > 0.05 && Math.random() < 0.06 + 0.22 * look.glint) {
+          award.sparkle(t.mesh.getWorldPosition(_o), {
+            count: 1, radius: 0.12 + 0.12 * look.glint, size: [0.04, 0.1 + 0.1 * look.glint], life: 0.45,
+            color: look.prism > 0.5 ? [1.6, 1.9, 2.3] : [2, 1.6, 0.8],
+          });
+        }
+        if (level > 0.25) {
+          stage.shake((0.004 + 0.014 * level) * kk);
+          t.seat.getWorldPosition(socket);
+          award.arcs(socket, (level - 0.25) * 1.3 * kk, { reach: 0.3 + 0.2 * level });
+        }
+      }, ease.linear);
+      tilt = 0;
+      head.pose.pitch.target -= pull;
+      forceps.setOpen(pinch);
+      aura.uniforms.uAward.value = look.shimmer;
+      if (last) { lift = l0 + stretch; return; }
+      lift = l0 + 0.007 + 0.006 * level;
+      await anim.tween(0.07, (k) => poseTooth(t, 0, lerp(l0 + stretch, lift, k)), ease.inQuad);
+    };
+
+    /** The tooth held: the prize climbs a step and everything hits a little harder. */
+    const stepUp = async (i, level) => {
+      heat = (i + 1) / (span + 1);
+      aura.uniforms.uHeat.value = heat;
+      t.seat.getWorldPosition(socket);
+      ui.onStep(i, steps[i], socket);
+      // the tooth itself levels up with the prize
+      const c = raiseLook(steps[i]);
+      if (c > 0.42) award.burstOn(t.mesh, { size: 0.6 + 1.1 * c, prism: smooth(0.7, 0.86, c), power: 0.22 + 0.4 * c, back: 0, overlay: true });
+      stage.spotlight(socket, smooth(0.35, 0.9, c) * 0.5);
+      sfx.step(i);
+      sfx.click();
+      stage.shake(0.014 + 0.03 * level);
+      stage.impact(socket, { zoom: 0.25 + 0.6 * level, chroma: 0.3 + 0.9 * level });
+      if (level > 0.45) stage.shockwave(socket, 0.4 + 0.8 * level);
+      stage.glow(0.06 * level);
+      head.kick({ pitch: -drag * (0.5 + 1.2 * level), y: drag * (0.3 + 0.6 * level), roll: rand(-0.5, 0.5) * (1 + level) });
+      head.pose.jaw.kick((upper ? 1 : -1) * (0.8 + 1.6 * level));
+      head.mech.spin += 1.5 + 4 * level;
+      head.mech.power = 1 + 1.4 * level;
+      fx.sparks.emit(socket, {
+        count: 8 + Math.round(26 * level), speed: 1.6 + 2.2 * level, dir: tY, spread: 0.9,
+        color: level > 0.6 ? [3.4, 2.6, 1.2] : [3, 1.9, 0.6], life: 0.4,
+      });
+      fx.puffs.emit(socket, { count: 1, color: [1.9, 1.25, 0.45], size: [0.06, 0.22 + 0.3 * level], life: 0.16, alpha: 0.7, additive: true, speed: 0, jitter: 0 });
+      award.sparkle(socket, { count: 3 + Math.round(8 * level), radius: 0.16 + 0.2 * level, size: [0.05, 0.12 + 0.12 * level], life: 0.6 });
+      await hitStop(0.03 + 0.04 * level);
+    };
+
+    /** The forceps loses its grip, flies off, and has to bite again. */
+    const slip = async () => {
+      sfx.slip();
+      ui.onSlip();
+      stage.shake(0.03);
+      award.arcs(null, 0);
+      head.kick({ pitch: -drag * 1.3, roll: rand(-0.8, 0.8), y: drag * 0.6 });
+      fx.sparks.emit(socket, { count: 18, speed: 2.6, dir: tY, spread: 1, color: [3.2, 2.4, 1.0], life: 0.35 });
+      const axis = V(0, 1, 0).applyQuaternion(tool.quaternion); // tool axis in the holder's space
+      const p0 = tool.position.clone(), p1 = p0.clone().addScaledVector(axis, 0.24);
+      const l0 = lift;
+      lift = Math.max(0, lift - 0.01);
+      await anim.tween(0.16, (k) => {
+        tool.position.lerpVectors(p0, p1, k);
+        forceps.setOpen(lerp(pinch, 0.8, Math.min(k * 2, 1)));
+        poseTooth(t, 0, lerp(l0, lift, k));
+      }, ease.outBack);
+      await anim.wait(0.24);
+      await anim.tween(0.2, (k) => tool.position.lerpVectors(p1, p0, k), ease.inOutQuad);
+      await anim.tween(0.08, (k) => forceps.setOpen(lerp(0.8, pinch, k)), ease.inQuad);
+      sfx.click();
+      stage.shake(0.008);
+    };
+
+    // ---- feel it out: the same few rocks for every tooth, so nothing is given away
+    await rock(0.07, 0.19, 0.5);
+    await rock(-0.09, 0.18, 0.6);
+    await rock(0.11, 0.17, 0.7);
+
+    // ---- the struggle: every haul it survives, the prize climbs a step
+    for (let i = 0; i < steps.length; i++) {
+      const level = Math.min(1, i / span);
+      ui.onTease(i);
+      await heave(level, false);
+      await stepUp(i, level);
+      await rock((i % 2 ? 1 : -1) * (0.1 + 0.08 * level), 0.14, 0.6 + 0.6 * level);
+      await rock((i % 2 ? -1 : 1) * (0.11 + 0.08 * level), 0.13, 0.7 + 0.6 * level);
+      if (i === 2 && steps.length >= 5) await slip();
     }
 
-    // ---- the strain before it lets go
-    sfx.strain();
-    const pull = upper ? 0.07 : -0.07;
-    head.pose.pitch.target += pull;
-    await anim.tween(0.36, (k) => {
-      const tremble = Math.sin(k * 60) * 0.006 * k;
-      poseTooth(t, lerp(tilt, 0, k) + tremble, lerp(lift, lift + 0.035, k));
-    }, ease.inQuad);
-    lift += 0.035;
+    // ---- the haul that finally does it
+    ui.onTease(steps.length);
+    if (grand) {
+      // the room goes dark and slow around the tooth
+      stage.spotlight(socket, outcome.tier === 'mega' ? 0.62 : 0.48);
+      sfx.heartbeat();
+      await real.wait(0.42);
+      sfx.heartbeat();
+      time.warp = 0.5;
+    }
+    await heave(Math.min(1, steps.length / span), true);
+    time.warp = 1;
 
     // ---- out it comes
     head.root.updateMatrixWorld(true);
@@ -278,26 +471,38 @@ export function createActions({ stage, head, anim, real, time, debris, fx, sfx, 
     const rootDir = tY.clone();
     scene.attach(t.holder);
     t.alive = false;
+    award.arcs(null, 0);
+    award.burstOff();
+    {
+      // the socket's light dies away once the tooth has left it
+      const b0 = look.beam;
+      real.tween(0.5, (k) => { beam.uniforms.uPower.value = b0 * (1 - k); }).then(() => { auras.delete(beam); beam.dispose(); t.beam = null; });
+    }
+    ui.onLock(outcome.mult);
     sfx.pop();
-    stage.shake(0.04);
-    head.pose.pitch.target -= pull;
-    head.kick({ pitch: (upper ? -1 : 1) * 1.5, y: (upper ? 1 : -1) * 0.9, z: -0.5, roll: rand(-0.6, 0.6) });
+    if (grand) sfx.boom(outcome.tier === 'mega' ? 1 : 0.7);
+    stage.shake(0.04 * power);
+    stage.impact(socket, { zoom: 0.45 * power, chroma: 0.55 * power });
+    if (power >= 1) stage.shockwave(socket, 0.55 * power);
+    if (grand) { stage.flash(0.07 * power); award.shockRing(socket, 3 + 2 * power); }
+    head.kick({ pitch: -drag * 1.5 * Math.min(power, 1.5), y: drag * 0.9, z: -0.5, roll: rand(-0.6, 0.6) });
     head.pose.jaw.kick(upper ? 1.5 : -2.4);
-    head.mech.spin += 4;
-    fx.sparks.emit(socket, { count: 30, speed: 3, dir: rootDir, spread: 0.8, color: [3.2, 1.9, 0.55], life: 0.5 });
-    fx.crumbs.emit(socket, { count: 10, speed: 1.6, dir: rootDir, spread: 0.7, up: 0.3, scale: [0.4, 0.9] });
-    fx.puffs.emit(socket, { count: 4, color: 0xdccfb6, size: [0.05, 0.36], life: 0.8, alpha: 0.3, dir: rootDir, speed: 0.5 });
-    fx.puffs.emit(socket, { count: 1, color: [3, 1.8, 0.6], size: [0.08, 0.5], life: 0.2, alpha: 0.8, additive: true, speed: 0, jitter: 0 });
+    head.mech.spin += 4 * power;
+    const won = steps.length > 0;
+    fx.sparks.emit(socket, { count: Math.round(30 * power), speed: 3 * (0.7 + 0.3 * power), dir: rootDir, spread: 0.8, color: [3.2, 1.9, 0.55], life: 0.5 });
+    fx.crumbs.emit(socket, { count: Math.round(10 * power), speed: 1.6, dir: rootDir, spread: 0.7, up: 0.3, scale: [0.4, 0.9] });
+    fx.puffs.emit(socket, { count: 4, color: won ? 0xdccfb6 : 0x6c6f75, size: [0.05, 0.36], life: 0.8, alpha: 0.3, dir: rootDir, speed: 0.5 });
+    if (won) fx.puffs.emit(socket, { count: 1, color: [3, 1.8, 0.6], size: [0.08, 0.3 + 0.3 * power], life: 0.2, alpha: 0.8, additive: true, speed: 0, jitter: 0 });
 
     addStump(t);
     const p0 = t.holder.position.clone(), q0 = t.holder.quaternion.clone();
     const pOut = p0.clone().addScaledVector(Yf, 0.78).addScaledVector(WORLD_UP, 0.06);
     const qOut = q0.clone().premultiply(new THREE.Quaternion().setFromAxisAngle(Xf, -0.3));
-    const apexLocal = V(0, -info.rootLen, 0);
+    const apexLocal = V(...info.rootTip);
     const wireA = V(), wireB = V(), wireMid = V();
     let snapped = false;
     nerve.mesh.visible = true;
-    hitStop(0.035);
+    hitStop(0.035 * Math.min(power, 1.6));
     await anim.tween(0.3, (k) => {
       t.holder.position.lerpVectors(p0, pOut, k);
       t.holder.quaternion.slerpQuaternions(q0, qOut, Math.min(k * 1.4, 1));
@@ -321,14 +526,18 @@ export function createActions({ stage, head, anim, real, time, debris, fx, sfx, 
     head.setJaw(0.2);
 
     // ---- hold it up to the camera
-    const cam = stage.camera;
-    const cq = cam.quaternion;
-    const cRight = V(1, 0, 0).applyQuaternion(cq), cUp = V(0, 1, 0).applyQuaternion(cq), cFwd = V(0, 0, -1).applyQuaternion(cq);
+    // The camera crept in during the struggle: ease it back out (further for a
+    // big win) so the tooth is shown in clear air in front of the head.
+    const camShow = camPos.clone().addScaledVector(viewDir, grand ? 0.55 : 0);
+    stage.flyTo(camShow, camTarget, 0.5);
+    const cFwd = camTarget.clone().sub(camShow).normalize();
+    const cRight = V().crossVectors(cFwd, WORLD_UP).normalize();
+    const cUp = V().crossVectors(cRight, cFwd).normalize();
     const Yw = cRight.clone().multiplyScalar(0.5).addScaledVector(cUp, -0.82).addScaledVector(cFwd, -0.12).normalize();
     const Zw = cRight.clone().addScaledVector(Yw, -Yw.dot(cRight)).normalize();
     const Xw = V().crossVectors(Yw, Zw).normalize();
     const qShow = basisQuat(Xw, Yw, Zw).multiply(tool.quaternion.clone().invert());
-    const gShow = cam.position.clone().addScaledVector(cFwd, 2.25).addScaledVector(cRight, -0.12).addScaledVector(cUp, 0.1);
+    const gShow = camShow.clone().addScaledVector(cFwd, grand ? 2.0 : 2.25).addScaledVector(cRight, -0.12).addScaledVector(cUp, grand ? -0.04 : 0.1);
     const pShow = gShow.clone().sub(tool.position.clone().applyQuaternion(qShow));
     const p1 = t.holder.position.clone(), q1 = t.holder.quaternion.clone();
     await anim.tween(0.5, (k) => {
@@ -337,14 +546,16 @@ export function createActions({ stage, head, anim, real, time, debris, fx, sfx, 
     }, ease.inOutCubic);
 
     const toothPos = t.mesh.getWorldPosition(V());
-    const showing = reveal(outcome, toothPos, cUp, onReveal, t);
-    // slow turn so the root catches the light
+    const showing = reveal(outcome, toothPos, cUp, ui.onReveal, t, t.mesh);
+    // turn it in the light; a big winner is paraded for as long as the show runs
+    const showTime = grand ? showLength(outcome) : outcome.tier === 'dud' ? 0.75 : 1.15;
+    const swings = grand ? Math.round(showTime / 1.3) : 0.5;
     const turn = new THREE.Quaternion();
-    await anim.tween(outcome.tier === 'dud' ? 0.75 : 1.15, (k) => {
-      turn.setFromAxisAngle(cUp, Math.sin(k * Math.PI) * 0.5);
+    await real.tween(showTime, (k) => {
+      turn.setFromAxisAngle(cUp, Math.sin(k * Math.PI * 2 * swings) * (grand ? 0.75 : 0.5));
       t.holder.quaternion.copy(qShow).premultiply(turn);
       t.holder.position.copy(gShow).sub(_p.copy(tool.position).applyQuaternion(t.holder.quaternion));
-    }, ease.inOutQuad);
+    }, grand ? ease.linear : ease.inOutQuad);
     await showing;
 
     // ---- let go: the tooth is tossed onto the floor by the base
@@ -365,6 +576,8 @@ export function createActions({ stage, head, anim, real, time, debris, fx, sfx, 
     const exit = tp.clone().addScaledVector(Yw, 2.4);
     anim.tween(0.45, (k) => tool.position.lerpVectors(tp, exit, k), ease.inCubic).then(() => { tool.visible = false; });
 
+    ui.onDone();
+    settleDown();
     freeHead();
     await restoreCam(0.85);
   }
@@ -396,10 +609,17 @@ export function createActions({ stage, head, anim, real, time, debris, fx, sfx, 
   }
 
   // ====================================================================== PAYOFF
-  /** Show what the target was worth. Resolves once the flourish has played. */
-  async function reveal(outcome, pos, dir, onReveal, tooth = null) {
+  /** How long the full celebration runs for a big win, in seconds. */
+  const showLength = (outcome) => (outcome.mult >= 50 ? 4.6 : outcome.tier === 'mega' ? 3.8 : 2.6);
+
+  /**
+   * Show what the target was worth. Resolves once the flourish has played.
+   * `tooth` is the pulled tooth (if any); `anchor` an object the show follows.
+   */
+  async function reveal(outcome, pos, dir, onReveal, tooth = null, anchor = null) {
     onReveal(pos);
     const { tier } = outcome;
+    const u = tooth && tooth.aura ? tooth.aura.uniforms : null;
     if (tier === 'dud') {
       sfx.lose();
       sfx.zap(0.08);
@@ -413,17 +633,98 @@ export function createActions({ stage, head, anim, real, time, debris, fx, sfx, 
       }
       return;
     }
+    if (tier === 'big' || tier === 'mega') { await celebrate(outcome, pos, dir, tooth, anchor); return; }
+
     sfx.win(tier);
-    const coins = { small: 3, win: 10, big: 26, mega: 60 }[tier];
-    fx.coins.emit(pos, { count: coins, speed: tier === 'mega' ? 3.6 : 2.6, dir: dir.clone().multiplyScalar(0.5).add(V(0, 0.9, 0.2)), spread: 0.7, up: 2.2, scale: [0.8, 1.2], life: 5 });
-    sfx.coin(Math.min(coins, 14));
-    fx.puffs.emit(pos, { count: 1, color: [2.4, 1.7, 0.6], size: [0.1, tier === 'mega' ? 1.5 : 0.7], life: 0.3, alpha: 0.5, additive: true, speed: 0, jitter: 0 });
+    const coins = { small: 3, win: 10 }[tier];
+    fx.coins.emit(pos, { count: coins, speed: 2.6, dir: dir.clone().multiplyScalar(0.5).add(V(0, 0.9, 0.2)), spread: 0.7, up: 2.2, scale: [0.8, 1.2], life: 5 });
+    sfx.coin(coins);
+    fx.puffs.emit(pos, { count: 1, color: [2.4, 1.7, 0.6], size: [0.1, 0.7], life: 0.3, alpha: 0.5, additive: true, speed: 0, jitter: 0 });
     fx.sparks.emit(pos, { count: 12 + coins, speed: 3, color: [3.2, 2.2, 0.7], life: 0.6 });
-    if (tier === 'big' || tier === 'mega') stage.shake(0.03);
+    award.sparkle(pos, { count: tier === 'win' ? 10 : 4, radius: 0.45, life: 0.8 });
     if (tooth) {
       const mat = tooth.mesh.material;
       mat.emissive.set(TIER_GLOW[tier]);
       real.tween(1.4, (k) => { mat.emissiveIntensity = Math.sin(k * Math.PI) * (tier === 'small' ? 0.1 : 0.24); });
+      // the heat fades; a modest winner keeps a soft shimmer
+      if (u) {
+        const h0 = u.uHeat.value, a0 = u.uAward.value;
+        u.uPulse.value = 1;
+        real.tween(0.9, (k) => { u.uHeat.value = h0 * (1 - k); u.uAward.value = a0 * (1 + 0.5 * Math.sin(k * Math.PI)); });
+      }
+    }
+  }
+
+  /** The full show for a big win: gold, sunburst, a fountain of coins, fireworks. */
+  async function celebrate(outcome, pos, dir, tooth, anchor) {
+    const mega = outcome.tier === 'mega', jackpot = outcome.mult >= 50;
+    const dur = showLength(outcome);
+    sfx.fanfare(jackpot ? 'jackpot' : outcome.tier);
+    sfx.boom(mega ? 0.8 : 0.5);
+    stage.flash(mega ? 0.2 : 0.12);
+    stage.impact(pos, { zoom: mega ? 1 : 0.7, chroma: 1 });
+    stage.shockwave(pos, mega ? 1.5 : 1);
+    stage.spotlight(pos, mega ? 0.72 : 0.55);
+    stage.glow(mega ? 0.12 : 0.07);
+    stage.shake(mega ? 0.05 : 0.03);
+    head.mech.power = mega ? 2.6 : 2;
+    head.mech.spin += 10;
+    award.shockRing(pos, mega ? 8 : 5.5);
+    if (anchor) award.burstOn(anchor, { size: mega ? 3.3 : 2.5, prism: mega ? 1 : 0, back: tooth ? 0.5 : -0.35, power: tooth ? 1 : 0.7 });
+    if (tooth) {
+      // the tooth turns to gold, then light starts running over it
+      const mat = tooth.mesh.material, c0 = mat.color.clone(), m0 = mat.metalness, r0 = mat.roughness;
+      const u = tooth.aura ? tooth.aura.uniforms : null;
+      const h0 = u ? u.uHeat.value : 0, a0 = u ? u.uAward.value : 0, p0 = u ? u.uPrism.value : 0, g0 = u ? u.uGlint.value : 0;
+      if (u) u.uPulse.value = 1;
+      real.tween(0.45, (k) => {
+        mat.color.copy(c0).lerp(GOLD, k);
+        mat.metalness = lerp(m0, 1, k);
+        mat.roughness = lerp(r0, 0.2, k);
+        if (u) {
+          u.uHeat.value = h0 * (1 - k);
+          u.uAward.value = lerp(a0, 1, k);
+          u.uPrism.value = lerp(p0, mega ? 1 : 0, k);
+          u.uGlint.value = lerp(g0, mega ? 1 : 0.6, k);
+        }
+      }, ease.outCubic);
+    }
+    if (mega) award.confetti(pos.clone().add(V(0, 0.4, 0)), jackpot ? 220 : 140, 3);
+
+    const up = dir.clone().multiplyScalar(0.4).add(V(0, 1, 0.15));
+    const hues = [[3.2, 1.2, 2.2], [1.2, 2.6, 3.4], [3.4, 2.6, 0.8], [1.6, 3.2, 1.4]];
+    let ticks = 0, bursts = 0;
+    await real.tween(dur, (k) => {
+      // a steady fountain of coins and stars for as long as the show runs
+      const due = Math.floor((k * dur) / 0.085);
+      while (ticks < due) {
+        ticks++;
+        fx.coins.emit(pos, { count: Math.round((mega ? 4 : 2) * (1 - k * 0.6)) + 1, speed: mega ? 3.6 : 2.9, dir: up, spread: 0.75, up: 2.4, scale: [0.8, 1.25], life: 4.5 });
+        award.sparkle(pos, {
+          count: mega ? 3 : 2, radius: mega ? 1.0 : 0.7, size: [0.06, mega ? 0.3 : 0.22], life: 0.9,
+          color: mega && ticks % 2 ? [1.5, 1.8, 2.2] : [2, 1.6, 0.8],
+        });
+        if (ticks % 5 === 0) sfx.coin(5);
+      }
+      // fireworks for the very big ones
+      if (mega && bursts < 6 && k * dur > 0.5 + bursts * 0.55) {
+        const hue = hues[bursts % 4];
+        const at = pos.clone().add(V(rand(-1.5, 1.5), rand(0.1, 1.1), rand(-0.6, 0.3)));
+        bursts++;
+        fx.sparks.emit(at, { count: 44, speed: 3.2, color: hue, life: 0.9 });
+        fx.puffs.emit(at, { count: 1, color: hue.map((c) => c * 0.5), size: [0.1, 0.7], life: 0.22, alpha: 0.6, additive: true, speed: 0, jitter: 0 });
+        award.sparkle(at, { count: 8, radius: 0.5, size: [0.08, 0.26], life: 0.8, color: hue });
+        sfx.shimmer(6, 0.5);
+        if (bursts === 2) stage.shockwave(pos, 1.1);
+      }
+    }, ease.linear);
+
+    award.burstOff();
+    stage.spotlight(null, 0);
+    stage.glow(0);
+    if (tooth && tooth.aura) {
+      const u = tooth.aura.uniforms;
+      real.tween(0.6, (k) => { u.uAward.value = lerp(1, 0.35, k); u.uGlint.value *= 1 - 0.5 * k; });
     }
   }
 
@@ -432,6 +733,8 @@ export function createActions({ stage, head, anim, real, time, debris, fx, sfx, 
   async function rebuild({ all = false } = {}) {
     debris.clear();
     fx.clear();
+    award.clear();
+    settleDown();
     sfx.rebuild();
     takeHead({ yaw: 0, pitch: 0 });
     head.setJaw(0.3);
@@ -444,6 +747,9 @@ export function createActions({ stage, head, anim, real, time, debris, fx, sfx, 
       const mat = t.mesh.material;
       mat.color.set(0xffffff);
       mat.emissiveIntensity = 0;
+      if (t.matOrig) { mat.color.copy(t.matOrig.color); mat.metalness = t.matOrig.metalness; mat.roughness = t.matOrig.roughness; }
+      if (t.aura) { auras.delete(t.aura); t.aura.dispose(); t.aura = null; }
+      if (t.beam) { auras.delete(t.beam); t.beam.dispose(); t.beam = null; }
       t.holder.add(t.mesh);
       t.mesh.position.set(0, 0, 0);
       t.mesh.quaternion.identity();
@@ -486,6 +792,10 @@ export function createActions({ stage, head, anim, real, time, debris, fx, sfx, 
   // dead eyes keep spitting the odd spark
   const _w = V();
   function update(dt) {
+    for (const a of auras) {
+      a.uniforms.uTime.value += dt;
+      if (a.uniforms.uPulse) a.uniforms.uPulse.value *= Math.exp(-dt * 5);
+    }
     for (const t of head.targets.values()) {
       if (t.kind !== 'eye' || !t.eye.dead) continue;
       if (Math.random() < dt * 0.55) {

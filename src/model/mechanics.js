@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
 import { revolve, ringProfile, gearGeometry, boltGeometry, FlexTube, Piston } from './geom.js';
 import { FLOOR_Y, HEAD_PIVOT, HINGE, POLY } from './layout.js';
 
@@ -27,8 +28,9 @@ function boltField(list, mat, parent, radius = 0.021) {
   return mesh;
 }
 
-export function buildMechanics({ mats, manifest, root, skull, jaw }) {
+export function buildMechanics({ mats, manifest, root, skull, jaw, jawPivot }) {
   const neck = new THREE.Group();
+  neck.name = 'neck-assembly';
   root.add(neck);
   const FY = FLOOR_Y;
   const upright = (mesh, x, y, z) => {
@@ -75,6 +77,7 @@ export function buildMechanics({ mats, manifest, root, skull, jaw }) {
   const spineB = new THREE.Vector3(HEAD_PIVOT[0], HEAD_PIVOT[1] - 0.06, HEAD_PIVOT[2]);
   const spineLen = spineA.distanceTo(spineB);
   const spine = new THREE.Group();
+  spine.name = 'neck-spine';
   alongAxis(spine, spineA, spineB);
   neck.add(spine);
   const rod = new THREE.Mesh(revolve([[0, 0], [0.05, 0], [0.05, spineLen], [0, spineLen]], 24), mats.chrome);
@@ -99,9 +102,10 @@ export function buildMechanics({ mats, manifest, root, skull, jaw }) {
   neck.add(ball);
 
   // ------------------------------------------------------------ throat tube
-  const throatA = new THREE.Vector3(0, FY + 0.1, 0.1), throatB = new THREE.Vector3(0, -1.2, 0.2);
+  const throatA = new THREE.Vector3(0, FY + 0.1, 0.08), throatB = new THREE.Vector3(0, -1.44, 0.10);
   const throatLen = throatA.distanceTo(throatB);
   const throat = new THREE.Group();
+  throat.name = 'telescopic-throat';
   alongAxis(throat, throatA, throatB);
   neck.add(throat);
   const tube = new THREE.Mesh(
@@ -112,38 +116,47 @@ export function buildMechanics({ mats, manifest, root, skull, jaw }) {
   const throatGlow = new THREE.Mesh(revolve([[0, 0.05], [0.022, 0.05], [0.022, throatLen - 0.02], [0, throatLen - 0.02]], 14), throatGlowMat);
   throat.add(tube, throatGlow);
   const capGeo = revolve(ringProfile(0.0, 0.108, 0, 0.05, 0.01), 36);
+  let throatTopCap;
   for (const z of [0.06, throatLen - 0.06]) {
     const cap = new THREE.Mesh(capGeo, mats.gold);
     cap.position.z = z;
     cap.castShadow = true;
     throat.add(cap);
+    if (z > 0.06) throatTopCap = cap;
   }
-  for (const z of [0.42, 0.74]) {
+  const throatBands = [];
+  for (const z of [throatLen * 0.4, throatLen * 0.72]) {
     const band = new THREE.Mesh(revolve(ringProfile(0.094, 0.104, 0, 0.024, 0.004), 36), mats.gunmetal);
     band.position.z = z;
     throat.add(band);
+    throatBands.push(band);
   }
 
   // ------------------------------------------------------------ glass neck shields
+  const neckShroud = new THREE.Group();
+  neckShroud.name = 'sliding-neck-shroud';
+  neck.add(neckShroud);
   for (const s of [-1, 1]) {
     const shield = new THREE.Mesh(
       revolve(
-        [[0.555, 0.3], [0.585, 0.3], [0.5, 1.02], [0.44, 1.5], [0.41, 1.5], [0.47, 1.02], [0.555, 0.3]],
+        [[0.555, 0.3], [0.585, 0.3], [0.38, 0.85], [0.23, 1.08], [0.20, 1.08], [0.35, 0.85], [0.555, 0.3]],
         28, { start: s > 0 ? -0.62 : Math.PI - 0.62, arc: 1.24, smooth: true },
       ),
       mats.collar,
     );
-    upright(shield, 0, FY, -0.2);
+    upright(shield, 0, FY, -0.42);
+    shield.name = 'neck-side-shield';
     shield.scale.set(1, 0.92, 1);
     shield.renderOrder = 1;
-    neck.add(shield);
+    neckShroud.add(shield);
     const rail = new THREE.Mesh(
-      revolve(ringProfile(0.405, 0.45, 1.49, 1.52, 0.004), 20, { start: s > 0 ? -0.66 : Math.PI - 0.66, arc: 1.32 }),
+      revolve(ringProfile(0.195, 0.24, 1.07, 1.10, 0.004), 20, { start: s > 0 ? -0.66 : Math.PI - 0.66, arc: 1.32 }),
       mats.gold,
     );
-    upright(rail, 0, FY, -0.2);
+    upright(rail, 0, FY, -0.42);
+    rail.name = 'neck-shield-rim';
     rail.scale.set(1, 0.92, 1);
-    neck.add(rail);
+    neckShroud.add(rail);
   }
 
   // ------------------------------------------------------------ skull base plate
@@ -266,7 +279,27 @@ export function buildMechanics({ mats, manifest, root, skull, jaw }) {
   // ------------------------------------------------------------ jaw hinge + actuators
   const hingeGeo = revolve([[0, -0.02], [0.088, -0.02], [0.088, 0.012], [0.07, 0.024], [0.03, 0.024], [0.03, 0.034], [0, 0.034]], 36);
   const jawPistons = [];
+  const jawGuides = [];
+  const carriageGeo = new RoundedBoxGeometry(0.05, 0.17, 0.075, 2, 0.012);
   for (const s of [-1, 1]) {
+    // Twin telescoping guide rods carry the hinge forward; the axle rotates
+    // inside the carriage while the carriage itself follows the skull frame.
+    const carriage = new THREE.Group();
+    carriage.name = `jaw-hinge-carriage-${s}`;
+    skull.add(carriage);
+    const block = new THREE.Mesh(carriageGeo, mats.gunmetal);
+    block.position.x = s * 0.624;
+    carriage.add(block);
+    for (const dy of [-0.057, 0.057]) {
+      const guide = new Piston(mats, { radius: 0.012, sleeve: 0.16, sleeveMat: mats.steel });
+      guide.group.name = `jaw-hinge-guide-${s}-${dy}`;
+      root.add(guide.group);
+      jawGuides.push({ p: guide, a: new THREE.Vector3(s * 0.624, HINGE.y + dy, HINGE.z - 0.19), b: new THREE.Vector3(s * 0.624, dy, 0), carriage });
+      const fastener = new THREE.Mesh(boltGeometry(0.009), mats.brass);
+      fastener.rotation.y = s * Math.PI / 2;
+      fastener.position.set(s * 0.654, dy, 0.01);
+      carriage.add(fastener);
+    }
     const hinge = new THREE.Mesh(hingeGeo, mats.brass);
     hinge.position.set(s * 0.645, HINGE.y, HINGE.z);
     hinge.rotation.y = (s * Math.PI) / 2;
@@ -277,14 +310,16 @@ export function buildMechanics({ mats, manifest, root, skull, jaw }) {
     pin.position.set(s * 0.67, HINGE.y, HINGE.z);
     jaw.add(pin);
     const p = new Piston(mats, { radius: 0.022, sleeve: 0.34 });
+    p.group.name = `jaw-actuator-${s}`;
     root.add(p.group);
     jawPistons.push({ p, a: new THREE.Vector3(s * 0.5, -0.25, 0.34), b: new THREE.Vector3(s * 0.525, -0.93, 0.1) });
   }
 
   // ------------------------------------------------------------ neck pistons
   const neckPistons = [];
-  for (const [x, z0, z1] of [[0.3, 0.06, 0.0], [-0.3, 0.06, 0.0], [0.3, -0.5, -0.46], [-0.3, -0.5, -0.46]]) {
-    const p = new Piston(mats, { radius: 0.04, sleeve: 0.86, sleeveMat: mats.gunmetal });
+  for (const [x, z0, z1] of [[0.16, -0.27, -0.21], [-0.16, -0.27, -0.21], [0.22, -0.5, -0.46], [-0.22, -0.5, -0.46]]) {
+    const p = new Piston(mats, { radius: 0.031, sleeve: 0.82, sleeveMat: mats.gunmetal });
+    p.group.name = `neck-actuator-${neckPistons.length}`;
     root.add(p.group);
     neckPistons.push({ p, a: new THREE.Vector3(x, FY + 0.13, z0), b: new THREE.Vector3(x * 0.78, -0.4, z1) });
   }
@@ -346,12 +381,29 @@ export function buildMechanics({ mats, manifest, root, skull, jaw }) {
   const wa = new THREE.Vector3(), wb = new THREE.Vector3(), tan = new THREE.Vector3();
   let gearAngle = 0;
   const mech = {
-    neck, gimbal, crystal, crystalMat, coreLight, templeGlow, throatGlowMat,
+    neck, neckPistons, jawPistons, jawGuides, gimbal, crystal, crystalMat, coreLight, templeGlow, throatGlowMat,
     spin: 0, // extra gear speed, decays on its own
     power: 1, // overall glow level of the core
 
     update(dt, clock, head) {
+      const shroudRetraction = THREE.MathUtils.smoothstep(head.jawPivot.rotation.x
+        + Math.max(0, head.pivot.rotation.x) * 1.5 + Math.abs(head.pivot.rotation.y) * 0.15, 0.08, 0.6);
+      neckShroud.position.y = -0.28 * shroudRetraction;
       root.updateMatrixWorld(true);
+
+      // Retract the illuminated throat cartridge below the chin's swept path.
+      // End fittings keep their dimensions; only the telescoping tube changes length.
+      jaw.localToWorld(wa.set(0, -1.22, 0.70));
+      throatB.y = Math.min(-1.44, wa.y - 0.14);
+      throatB.y = Math.max(FY + 0.31, throatB.y);
+      const length = throatA.distanceTo(throatB);
+      alongAxis(throat, throatA, throatB);
+      tube.scale.z = (length - 0.14) / (throatLen - 0.14);
+      tube.position.z = 0.1 * (1 - tube.scale.z);
+      throatGlow.scale.z = (length - 0.07) / (throatLen - 0.07);
+      throatGlow.position.z = 0.05 * (1 - throatGlow.scale.z);
+      throatTopCap.position.z = length - 0.06;
+      throatBands.forEach((band, i) => { band.position.z = length * (i ? 0.72 : 0.4); });
 
       // gears: idle tick plus whatever the head is doing
       const drive = 0.35 + mech.spin + Math.abs(head.pose.yaw.v) * 4 + Math.abs(head.pose.jaw.v) * 6;
@@ -379,6 +431,10 @@ export function buildMechanics({ mats, manifest, root, skull, jaw }) {
 
       for (const n of neckPistons) n.p.set(n.a, skull.localToWorld(wb.copy(n.b)));
       for (const j of jawPistons) j.p.set(skull.localToWorld(wa.copy(j.a)), jaw.localToWorld(wb.copy(j.b)));
+      for (const guide of jawGuides) {
+        guide.carriage.position.copy(jawPivot.position);
+        guide.p.set(skull.localToWorld(wa.copy(guide.a)), skull.localToWorld(wb.copy(guide.b).add(jawPivot.position)));
+      }
 
       for (const b of bundles) {
         skull.localToWorld(wa.copy(b.s2));

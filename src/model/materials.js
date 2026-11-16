@@ -35,8 +35,9 @@ export function createMaterials() {
     rubber: new THREE.MeshStandardMaterial({ color: 0x101114, metalness: 0, roughness: 0.85 }),
 
     enamel: new THREE.MeshPhysicalMaterial({
-      vertexColors: true, roughness: 0.2, metalness: 0,
-      clearcoat: 0.9, clearcoatRoughness: 0.12, envMapIntensity: 0.55,
+      vertexColors: true, roughness: 0.23, metalness: 0, ior: 1.54,
+      clearcoat: 0.45, clearcoatRoughness: 0.19, envMapIntensity: 0.7,
+      specularIntensity: 0.85,
     }),
 
     cableRed: new THREE.MeshStandardMaterial({ color: 0xc1272d, roughness: 0.45, metalness: 0.05 }),
@@ -90,16 +91,52 @@ function etchSeams(mat) {
   };
 }
 
-/** Paints a baked tooth geometry: pale enamel crown, warmer root. */
+/** Separate enamel/root finish, shared program with per-tooth uniforms. */
+export function createToothMaterial(base, crownHeight, seed) {
+  const mat = base.clone();
+  const variation = Math.sin(seed * 2.399);
+  // Keep the tint independent of material.color, which win/rebuild animations reset.
+  const tint = new THREE.Color().setRGB(1, 0.993 + variation * 0.005, 0.977 + variation * 0.009);
+  mat.onBeforeCompile = (shader) => {
+    shader.uniforms.toothCrownHeight = { value: crownHeight };
+    shader.uniforms.toothTint = { value: tint };
+    shader.vertexShader = shader.vertexShader
+      .replace('#include <common>', '#include <common>\nvarying vec3 vToothPosition;')
+      .replace('#include <begin_vertex>', '#include <begin_vertex>\nvToothPosition = position;');
+    shader.fragmentShader = shader.fragmentShader
+      .replace('#include <common>', `#include <common>
+        varying vec3 vToothPosition;
+        uniform float toothCrownHeight;
+        uniform vec3 toothTint;`)
+      .replace('#include <color_fragment>', `#include <color_fragment>
+        diffuseColor.rgb *= toothTint;`)
+      .replace('#include <roughnessmap_fragment>', `#include <roughnessmap_fragment>
+        float crown = smoothstep(-0.006, 0.018, vToothPosition.y);
+        float edge = smoothstep(0.65, 1.0, vToothPosition.y / toothCrownHeight);
+        // Very fine growth bands modulate the highlight, never the silhouette.
+        float bands = sin(vToothPosition.y * 2200.0 + sin(vToothPosition.x * 130.0) * 1.8);
+        float bandAA = 1.0 - smoothstep(0.6, 2.5, fwidth(vToothPosition.y * 2200.0));
+        roughnessFactor = mix(0.43, roughnessFactor, crown) - edge * 0.035
+          + bands * bandAA * crown * (1.0 - edge) * 0.012;`)
+      .replace('#include <lights_physical_fragment>', `#include <lights_physical_fragment>
+        #ifdef USE_CLEARCOAT
+          material.clearcoat *= crown;
+        #endif`);
+  };
+  mat.customProgramCacheKey = () => 'tooth-enamel-v1';
+  return mat;
+}
+
+/** Paints a baked tooth geometry: ivory dentin, cool incisal enamel, warm root. */
 export function paintTooth(geo, crownHeight, meshKey) {
   const pos = geo.attributes.position;
   const nrm = geo.attributes.normal;
   const sdf = toothSdf(meshKey);
   const col = new Float32Array(pos.count * 3);
-  const enamel = new THREE.Color(0xe4dccb);
-  const edge = new THREE.Color(0xcfd9e2);
-  const root = new THREE.Color(0xd6b47a);
-  const tip = new THREE.Color(0xa87a45);
+  const enamel = new THREE.Color(0xf3eddf);
+  const edge = new THREE.Color(0xd8e5ec);
+  const root = new THREE.Color(0xd9bf91);
+  const tip = new THREE.Color(0xb99a6d);
   const c = new THREE.Color();
   let minY = Infinity;
   for (let i = 0; i < pos.count; i++) minY = Math.min(minY, pos.getY(i));
@@ -107,14 +144,14 @@ export function paintTooth(geo, crownHeight, meshKey) {
     const y = pos.getY(i);
     if (y >= 0) {
       const k = THREE.MathUtils.smoothstep(y, crownHeight * 0.55, crownHeight);
-      c.copy(enamel).lerp(edge, k * 0.55);
-      // a faint stain line right at the gum
-      const g = 1 - THREE.MathUtils.smoothstep(y, 0, 0.02);
-      c.lerp(root, g * 0.5);
+      c.copy(enamel).lerp(edge, k * 0.3);
+      // Dentin warmth fades gradually out of the neck, without a stain stripe.
+      const g = 1 - THREE.MathUtils.smoothstep(y, 0, crownHeight * 0.44);
+      c.lerp(root, g * 0.22);
     } else {
       const k = THREE.MathUtils.smoothstep(y, -0.02, 0);
       const d = THREE.MathUtils.smoothstep(-y, 0, -minY);
-      c.copy(root).lerp(tip, d * 0.8).lerp(enamel, k * 0.5);
+      c.copy(root).lerp(tip, d * 0.6).lerp(enamel, k * 0.7);
     }
     // ambient occlusion straight from the distance field: darkens the
     // fissures, the gaps between cusps and the fork of the roots
@@ -125,7 +162,7 @@ export function paintTooth(geo, crownHeight, meshKey) {
       occ += wgt * Math.max(0, h - sdf(px + nx * h, y + ny * h, pz + nz * h));
       wgt *= 0.6;
     }
-    const ao = Math.max(0.35, 1 - occ * 26);
+    const ao = Math.max(0.62, 1 - occ * 17);
     col[i * 3] = c.r * ao; col[i * 3 + 1] = c.g * ao * (0.97 + 0.03 * ao); col[i * 3 + 2] = c.b * ao * (0.92 + 0.08 * ao);
   }
   geo.setAttribute('color', new THREE.BufferAttribute(col, 3));

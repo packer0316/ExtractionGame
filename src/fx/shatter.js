@@ -56,7 +56,7 @@ export class LensDome {
   }
 
   _capGeometry() {
-    const rings = 14, segs = 56;
+    const rings = 24, segs = 128;
     const pos = [], nrm = [], idx = [];
     const p = new THREE.Vector3();
     const layer = (inset, sign) => {

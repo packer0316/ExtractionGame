@@ -1,10 +1,11 @@
 import * as THREE from 'three';
 import { loadMesh, loadManifest } from './loadMesh.js';
-import { createMaterials, paintTooth } from './materials.js';
+import { createMaterials, createToothMaterial, paintTooth } from './materials.js';
 import { TEETH, EYES, HINGE, HEAD_PIVOT, TOOTH_MESHES, TOOTH_TYPES } from './layout.js';
 import { buildEye } from './eyes.js';
 import { buildMechanics } from './mechanics.js';
 import { Spring } from '../util/anim.js';
+import { fitJawPivot } from './jawMotion.js';
 
 const V = (a) => new THREE.Vector3(a[0], a[1], a[2]);
 
@@ -65,7 +66,9 @@ export async function createHead() {
     const holder = new THREE.Group();
     holder.position.set(...t.pos);
     holder.quaternion.setFromRotationMatrix(new THREE.Matrix4().makeBasis(V(t.xAxis), V(t.yAxis), V(t.zAxis)));
-    const mesh = new THREE.Mesh(toothGeo[t.mesh], mats.enamel.clone());
+    const mesh = new THREE.Mesh(toothGeo[t.mesh], createToothMaterial(
+      mats.enamel, TOOTH_TYPES[t.zone].ch0, t.n + (t.side + 1) * 4 + (t.arch === 'L' ? 17 : 0),
+    ));
     mesh.scale.set(...t.scale);
     mesh.castShadow = true;
     mesh.userData.targetId = t.id;
@@ -74,7 +77,7 @@ export async function createHead() {
     // brass seat ring around the tooth neck (stays behind after extraction)
     const collar = new THREE.Mesh(collarGeo, mats.brass);
     collar.rotation.x = Math.PI / 2;
-    collar.scale.set(t.width * 0.47, t.width * 0.47 * (0.55 + 0.45 * t.scale[2] / t.scale[0]) * (t.zone === 'incisor' ? 0.78 : 0.95), 0.04);
+    collar.scale.set(t.width * 0.47, t.width * 0.47 * (0.55 + 0.45 * t.scale[2] / Math.abs(t.scale[0])) * (t.zone === 'incisor' ? 0.78 : 0.95), 0.04);
     collar.position.y = 0.004;
     const seat = new THREE.Group();
     seat.position.copy(holder.position);
@@ -133,7 +136,7 @@ export async function createHead() {
       }
       pivot.rotation.set(pose.pitch.update(dt), pose.yaw.update(dt), pose.roll.update(dt), 'YXZ');
       pivot.position.set(HEAD_PIVOT[0], HEAD_PIVOT[1] + pose.recoilY.update(dt), HEAD_PIVOT[2] + pose.recoilZ.update(dt));
-      jawPivot.rotation.x = Math.max(0, pose.jaw.update(dt));
+      fitJawPivot(jawPivot, pose.jaw.update(dt), pivot.rotation.x, pose.recoilY.x, pose.recoilZ.x);
       for (const t of targets.values()) if (t.kind === 'eye') t.eye.update(dt, clock, head);
       mech.update(dt, clock, head);
     },

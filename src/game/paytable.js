@@ -1,29 +1,46 @@
 // Payout model. Every target belongs to a zone; each zone has its own
-// table of [multiplier, weight]. Tables are tuned so each zone returns
-// about 96% of the stake over the long run, with volatility rising from
-// the front teeth to the molars to the eyes.
+// table of [multiplier, weight], with volatility rising from the front teeth
+// to the molars to the eyes. Two sets of weights are kept side by side:
+//
+//   balanced  each zone returns about 96% of the stake over the long run
+//   showcase  weighted towards the top so the big-win shows come up most
+//             plays, with one extra top prize on the front teeth so every
+//             zone can reach the biggest show. It pays out many times the
+//             stake and is only meant for demonstrating the effects.
 
-export const ZONES = {
+/** Which set of weights is live. Set to false to go back to ~96% RTP. */
+export const SHOWCASE = true;
+
+const WEIGHTS = {
   incisor: {
-    name: '門牙', en: 'INCISOR', risk: 1, tool: 'forceps',
-    table: [[0.3, 290], [0.6, 275], [1, 205], [1.5, 125], [2, 68], [4, 28], [8, 9]],
+    balanced: [[0.3, 290], [0.6, 275], [1, 205], [1.5, 125], [2, 68], [4, 28], [8, 9]],
+    showcase: [[0.3, 6], [0.6, 8], [1, 10], [1.5, 12], [2, 14], [4, 18], [8, 20], [20, 12]],
   },
   canine: {
-    name: '犬齒', en: 'CANINE', risk: 2, tool: 'forceps',
-    table: [[0, 345], [0.5, 270], [1, 190], [2, 118], [3, 49], [6, 22], [15, 8]],
+    balanced: [[0, 345], [0.5, 270], [1, 190], [2, 118], [3, 49], [6, 22], [15, 8]],
+    showcase: [[0, 8], [0.5, 8], [1, 10], [2, 12], [3, 14], [6, 18], [15, 18], [30, 12]],
   },
   premolar: {
-    name: '小臼齒', en: 'PREMOLAR', risk: 3, tool: 'forceps',
-    table: [[0, 560], [0.5, 180], [1.5, 128], [3, 76], [5, 36], [10, 15.5], [25, 4.5]],
+    balanced: [[0, 560], [0.5, 180], [1.5, 128], [3, 76], [5, 36], [10, 15.5], [25, 4.5]],
+    showcase: [[0, 8], [0.5, 6], [1.5, 10], [3, 14], [5, 20], [10, 22], [25, 20]],
   },
   molar: {
-    name: '大臼齒', en: 'MOLAR', risk: 4, tool: 'forceps',
-    table: [[0, 722], [1, 118], [2, 80], [4, 46], [8, 23], [20, 10], [50, 2.4]],
+    balanced: [[0, 722], [1, 118], [2, 80], [4, 46], [8, 23], [20, 10], [50, 2.4]],
+    showcase: [[0, 10], [1, 6], [2, 10], [4, 14], [8, 20], [20, 22], [50, 18]],
   },
   eye: {
-    name: '玻璃眼', en: 'GLASS EYE', risk: 5, tool: 'hammer',
-    table: [[0, 820], [1, 74], [2, 48], [5, 31], [10, 15], [25, 7.4], [100, 3]],
+    balanced: [[0, 820], [1, 74], [2, 48], [5, 31], [10, 15], [25, 7.4], [100, 3]],
+    showcase: [[0, 12], [1, 6], [2, 8], [5, 16], [10, 20], [25, 20], [100, 18]],
   },
+};
+const table = (zone) => WEIGHTS[zone][SHOWCASE ? 'showcase' : 'balanced'];
+
+export const ZONES = {
+  incisor: { name: '門牙', en: 'INCISOR', risk: 1, tool: 'forceps', table: table('incisor') },
+  canine: { name: '犬齒', en: 'CANINE', risk: 2, tool: 'forceps', table: table('canine') },
+  premolar: { name: '小臼齒', en: 'PREMOLAR', risk: 3, tool: 'forceps', table: table('premolar') },
+  molar: { name: '大臼齒', en: 'MOLAR', risk: 4, tool: 'forceps', table: table('molar') },
+  eye: { name: '玻璃眼', en: 'GLASS EYE', risk: 5, tool: 'hammer', table: table('eye') },
 };
 
 for (const z of Object.values(ZONES)) {

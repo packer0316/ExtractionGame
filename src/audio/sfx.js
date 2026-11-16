@@ -172,6 +172,63 @@ export function createSfx() {
       tone({ type: 'triangle', f0: 220, f1: 196, dur: 0.22, gain: 0.12 });
       tone({ type: 'triangle', f0: 164.8, f1: 146.8, dur: 0.34, gain: 0.12, at: 0.14 });
     }),
+
+    // ---- the struggle: every time the tooth holds, the prize climbs a step
+    /** Bell for step `i` of the ladder; each step rings a note higher. */
+    step: guard((i = 0) => {
+      const f = 587.33 * Math.pow(2, [0, 2, 4, 7, 9, 12, 14, 16, 19][Math.min(i, 8)] / 12);
+      tone({ type: 'triangle', f0: f, dur: 0.5, gain: 0.2 });
+      tone({ type: 'sine', f0: f * 2, dur: 0.38, gain: 0.09 });
+      tone({ type: 'sine', f0: f * 3.01, dur: 0.22, gain: 0.04 });
+      burst({ dur: 0.02, gain: 0.2, f0: 5200, q: 2 });
+      tone({ f0: 150, f1: 60, dur: 0.14, gain: 0.25 + Math.min(i, 6) * 0.03 });
+    }),
+    /** Rising whine while the forceps hauls; `level` 0..1 lifts the pitch. */
+    tension: guard((dur = 0.6, level = 0) => {
+      const f = 90 + level * 160;
+      tone({ type: 'sawtooth', f0: f, f1: f * 2.1, dur, gain: 0.06 + level * 0.04, curve: 'lin', attack: dur * 0.7 });
+      tone({ type: 'sine', f0: f * 3, f1: f * 6.5, dur, gain: 0.03 + level * 0.03, curve: 'lin', attack: dur * 0.8 });
+      burst({ dur, gain: 0.04 + level * 0.05, f0: 700 + level * 900, f1: 2600 + level * 3000, q: 5, attack: dur * 0.8 });
+    }),
+    /** The forceps loses its grip. */
+    slip: guard(() => {
+      burst({ dur: 0.09, gain: 0.3, f0: 6200, f1: 2400, q: 3 });
+      tone({ type: 'triangle', f0: 2400, f1: 1300, dur: 0.16, gain: 0.14 });
+      tone({ f0: 210, f1: 70, dur: 0.16, gain: 0.4, at: 0.07 });
+      burst({ dur: 0.04, gain: 0.3, type: 'highpass', f0: 2200, at: 0.07 });
+    }),
+    heartbeat: guard(() => {
+      tone({ f0: 74, f1: 40, dur: 0.16, gain: 0.5 });
+      tone({ f0: 66, f1: 36, dur: 0.2, gain: 0.4, at: 0.2 });
+    }),
+    /** Deep boom with a tail, for the moment a prize tooth lets go. */
+    boom: guard((power = 1) => {
+      tone({ f0: 120, f1: 28, dur: 0.9, gain: 0.6 * power });
+      burst({ dur: 0.5, gain: 0.3 * power, type: 'lowpass', f0: 900, f1: 120 });
+      burst({ dur: 0.9, gain: 0.12 * power, type: 'highpass', f0: 5000, f1: 9000, attack: 0.02 });
+    }),
+    shimmer: guard((n = 10, dur = 1.2) => {
+      for (let i = 0; i < n; i++) ping(3200 + Math.random() * 5200, 0.035, Math.random() * dur, 0.2 + Math.random() * 0.2);
+    }),
+    /** Fanfare for the big ones. tier: 'big' | 'mega' | 'jackpot' */
+    fanfare: guard((tier = 'big') => {
+      const root = 261.63;
+      const run = { big: [0, 4, 7, 12, 16], mega: [0, 4, 7, 12, 16, 19, 24], jackpot: [0, 4, 7, 12, 16, 19, 24, 28, 31] }[tier] || [0, 4, 7];
+      run.forEach((n, i) => {
+        const f = root * Math.pow(2, n / 12);
+        tone({ type: 'triangle', f0: f, dur: 0.36, gain: 0.17, at: i * 0.085 });
+        tone({ type: 'sawtooth', f0: f, dur: 0.2, gain: 0.035, at: i * 0.085 });
+      });
+      // the chord it lands on, held
+      const end = run.length * 0.085;
+      const top = run[run.length - 1];
+      for (const n of [top - 12, top - 8, top - 5, top]) {
+        tone({ type: 'triangle', f0: root * Math.pow(2, n / 12), dur: tier === 'big' ? 1.1 : 1.9, gain: 0.11, at: end });
+      }
+      tone({ type: 'sine', f0: root / 2, dur: tier === 'big' ? 1.2 : 2.0, gain: 0.24, at: end });
+      const shower = tier === 'big' ? 18 : tier === 'mega' ? 36 : 60;
+      for (let i = 0; i < shower; i++) ping(2800 + Math.random() * 3600, 0.04, end + Math.random() * (tier === 'big' ? 1.2 : 2.4), 0.1);
+    }),
     rebuild: guard(() => {
       tone({ type: 'sawtooth', f0: 90, f1: 420, dur: 0.9, gain: 0.05, curve: 'lin', attack: 0.3 });
       for (let i = 0; i < 16; i++) {
