@@ -1,0 +1,4 @@
+# Batch files must keep CRLF or cmd.exe misreads them
+*.bat text eol=crlf
+# Baked meshes (tools/bake.mjs output)
+*.bin binary
