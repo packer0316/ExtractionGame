@@ -25,6 +25,18 @@ async function boot() {
   stage.scene.add(head.root);
 
   const sfx = createSfx();
+  sfx.preload(); // fetch the recordings now; they start playing after the first click
+  // On GoldSaucer, the platform's music / sound-effect switches drive the two audio buses.
+  const gs = window.GoldSaucer;
+  if (gs && gs.audio) {
+    (async () => {
+      try {
+        await gs.init?.();
+        gs.on?.('audioChanged', (s) => sfx.setChannels(s)); // subscribe before reading, as the SDK asks
+        sfx.setChannels(await gs.audio.getSettings());
+      } catch (err) { console.warn('GoldSaucer audio settings unavailable', err); }
+    })();
+  }
   const debris = new Debris(stage.scene);
   const fx = createParticles(stage.scene);
   const hammer = createHammer(head.mats);
@@ -139,7 +151,10 @@ async function boot() {
           // a big win gets the headline instead of the small floating label
           hud.ladder.hide();
           const jackpot = outcome.mult >= 50;
-          hud.banner(jackpot ? 'JACKPOT' : outcome.tier === 'mega' ? 'MEGA WIN' : 'BIG WIN', outcome.win, jackpot ? 'jackpot' : outcome.tier, outcome.mult);
+          const cls = jackpot ? 'jackpot' : outcome.tier;
+          hud.banner(jackpot ? 'JACKPOT' : outcome.tier === 'mega' ? 'MEGA WIN' : 'BIG WIN', outcome.win, cls, outcome.mult);
+          // the slot machine pays out while the headline counts (same lengths as hud.banner)
+          sfx.countUp({ big: 1.1, mega: 1.9, jackpot: 2.6 }[cls], cls);
         } else {
           hud.pop(x, Math.max(y - 86, 170), outcome); // sit above the target, not on it
         }
@@ -241,6 +256,14 @@ async function boot() {
     actions.update(dt);
     stage.update(raw);
     stage.render();
+    // let the servos, jaw pistons and gears be heard in step with the head
+    const pose = head.pose;
+    let eyeMove = 0;
+    for (const t of head.targets.values()) if (t.kind === 'eye') eyeMove = Math.max(eyeMove, Math.abs(t.eye.apertureTarget - t.eye.aperture));
+    sfx.motion({
+      headSpeed: Math.abs(pose.yaw.v) + Math.abs(pose.pitch.v) + Math.abs(pose.roll.v),
+      jawOpen: pose.jaw.x, jawVel: pose.jaw.v, gearSpeed: head.mech.spin, eyeMove,
+    });
 
     if (!TEST) {
       quality.acc += raw; quality.n++;
@@ -259,7 +282,7 @@ async function boot() {
     }
     requestAnimationFrame(frame);
   }
-  window.__game = { stage, head, anim, real, time, game, actions, play, newHead, hud, fx, award, debris, THREE, ZONES };
+  window.__game = { stage, head, anim, real, time, game, actions, play, newHead, hud, fx, award, debris, sfx, THREE, ZONES };
   frame();
 }
 

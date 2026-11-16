@@ -1,6 +1,6 @@
-# EXTRACTION — 玻璃顱骨 · 破壞下注
+# 拔爽了沒? — 玻璃顱骨 · 破壞下注
 
-一款「破壞型」下注遊戲原型：一顆透明玻璃機械頭顱，共有 30 個可下注的部位（28 顆牙齒 + 2 顆玻璃眼）。
+（專案代號 EXTRACTION）一款「破壞型」下注遊戲原型：一顆透明玻璃機械頭顱，共有 30 個可下注的部位（28 顆牙齒 + 2 顆玻璃眼）。
 選好 BET，點擊任一部位就出手一次：牙齒用拔牙鉗拔除，眼睛用鐵鎚敲碎，破壞後揭曉該部位的返還倍率。
 
 技術：three.js（WebGL）+ Vite，無任何外部美術或音效檔，模型、特效、音效全部由程式產生。
@@ -16,6 +16,25 @@ npm install
 npm run dev        # http://127.0.0.1:5173
 npm run build      # 輸出到 dist/，可直接放到任何靜態主機
 ```
+
+## 上架到金碟遊樂場（GoldSaucer）
+
+平台規格見 https://goldsaucer.ovan929.chatgpt.site/docs ：上傳 zip，根目錄要有 `index.html`；`.bin` 在允許的副檔名內；單檔 20 MB、壓縮檔 100 MB 以內；封面建議 16:10、1 MB 以內。
+
+上架包需要的兩個檔案放在 `public/`，建置時會一起複製到 `dist/` 根目錄：
+
+- `public/goldsaucer.json`：平台設定（入口、封面、方向）。
+- `public/cover.jpg`：1600×1000 封面，由 `npm run cover` 從遊戲畫面產生（需先開著 `npm run dev`）。
+
+打包：
+
+```bash
+npm run build
+python -c "import os,zipfile;z=zipfile.ZipFile('dist/bashuang.zip','w',zipfile.ZIP_DEFLATED);[z.write(os.path.join(r,n),os.path.relpath(os.path.join(r,n),'dist').replace(os.sep,'/')) for r,_,ns in os.walk('dist') for n in ns if n!='bashuang.zip'];z.close()"
+```
+
+zip 裡的路徑必須用 `/`（Windows PowerShell 5.1 的 `Compress-Archive` 會寫成 `\`，平台會拒收）。
+上傳：在平台「創作者後台」建立遊戲後上傳 zip；或建立 API 權杖讓 AI 透過 `/agent/mcp` 代為上傳。
 
 ## 玩法
 
@@ -74,7 +93,33 @@ npm run build      # 輸出到 dist/，可直接放到任何靜態主機
 - **玻璃**：物理式穿透材質（折射 + 厚度染色），外殼接縫線在著色器內繪製；攝影棚燈光是程式產生的環境貼圖。
 - **鏡片碎裂**：每片鏡片預先依撞擊點切成放射狀 + 同心圓的碎片，裂紋由內往外蔓延，見 [src/fx/shatter.js](src/fx/shatter.js)。
 - **演出編排**：兩套破壞動畫與重組動畫都在 [src/game/actions.js](src/game/actions.js)。
-- **音效**：全部用 WebAudio 即時合成，見 [src/audio/sfx.js](src/audio/sfx.js)。
+- **音效**：真實錄音素材（見下方「音效」），載入前或載入失敗時退回 WebAudio 合成音，見 [src/audio/sfx.js](src/audio/sfx.js)。
+
+## 音效
+
+所有素材都是 **CC0（公共領域）**，可商用、不需標註；來源清單在 [public/sfx/CREDITS.txt](public/sfx/CREDITS.txt)：
+
+- Kenney（kenney.nl）的 8 個音效包：衝擊、科幻、RPG、賭場、介面、數位、UI、音樂短曲。
+- Freesound 上 30 個 CC0 錄音：玻璃碎裂、骨頭碎裂、伺服馬達、液壓、心跳、老虎機派彩、號角等。
+
+[tools/sfx_build.py](tools/sfx_build.py) 負責剪輯：每個音效的來源、裁切點、疊加、淡入淡出都寫在表格裡，統一響度後輸出到 `public/sfx/`（單次音效為 MP3，循環音效為 WAV 以免接縫有空隙）。要調整就改表格重跑：
+
+```bash
+python tools/sfx_build.py <素材資料夾>   # 資料夾內需有 kflat/（Kenney 的 .ogg 攤平）與 fs/<id>.mp3
+```
+
+遊戲裡的對應：
+
+| 時機 | 音效 |
+| --- | --- |
+| 待機 | 工業機械低頻嗡鳴＋齒輪滴答（循環；齒輪轉越快滴答越快） |
+| 擺頭／張嘴 | 伺服馬達循環，音量與音高跟著頭部角速度；下顎張開噴氣、閉合撞擊 |
+| 敲眼 | 揮擊破風、鐵鎚撞擊、玻璃裂開→破洞→大碎裂＋慢動作碎響、碎片落地、斷電、殘骸火花 |
+| 拔牙 | 鉗子夾緊、吱嘎搖動、牙根研磨、骨頭碎裂（每撐住一次）、打滑、心跳、拔出、神經斷裂、牙齒落地 |
+| 開獎 | 升階的「叮」逐級升高＋籌碼聲；小獎鋼鼓短曲；BIG 號角；MEGA／JACKPOT 號角＋老虎機鈴聲＋金幣雨（JACKPOT 再加天使合唱） |
+| 滾分 | 金額滾動期間播老虎機出幣循環，停下時敲鐘 |
+
+在金碟遊樂場上，待機的機械聲走平台的「音樂」開關，其他走「音效」開關；遊戲右下角的「音效」鈕是總開關。
 
 ## 目錄
 

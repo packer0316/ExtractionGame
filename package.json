@@ -9,7 +9,8 @@
     "build": "vite build",
     "preview": "vite preview",
     "bake": "node tools/bake.mjs",
-    "shot": "node tools/shot.mjs"
+    "shot": "node tools/shot.mjs",
+    "cover": "node tools/cover.mjs"
   },
   "dependencies": {
     "three": "^0.187.0"

@@ -32,7 +32,7 @@ export function createHud(root, { game, onPlay, onHover, onNewHead, onTurbo, onM
   // ------------------------------------------------------------ top bar
   const top = h('div', 'hud-top');
   top.append(
-    h('div', 'brand', '<span class="logo">EXTRACTION</span><span class="tag">玻璃顱骨 · 破壞下注</span>'),
+    h('div', 'brand', '<span class="logo">拔爽了沒?</span><span class="tag">玻璃顱骨 · 破壞下注</span>'),
     h('div', 'wallet', '<label>CREDITS</label><b id="hud-balance">0</b>'),
   );
 

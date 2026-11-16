@@ -762,7 +762,7 @@ export function createActions({ stage, head, anim, real, time, debris, fx, award
       jobs.push(
         anim.wait(0.25 + i * 0.045).then(() => {
           t.holder.visible = true;
-          sfx.click();
+          sfx.seat();
           return anim.tween(0.3, (k) => {
             t.holder.position.copy(t.home.pos).addScaledVector(outDir, (1 - k) * 0.5);
             t.holder.scale.setScalar(0.55 + 0.45 * Math.min(k * 1.6, 1));

@@ -1,0 +1,37 @@
+Sound effects of 拔爽了沒? — every source is CC0 1.0 (public domain); no attribution is required.
+They are cut, layered and loudness-matched by tools/sfx_build.py.
+
+Kenney (kenney.nl), CC0: Casino Audio, Digital Audio, Impact Sounds, Interface Sounds,
+Music Jingles, RPG Audio, Sci-Fi Sounds, UI Audio.
+
+Freesound (freesound.org), CC0:
+  131302  release_air_pffft — reg7783  https://freesound.org/s/131302/
+  147993  Bone Cracking — bewareofkites20  https://freesound.org/s/147993/
+  189630  Spark — elliott.klein  https://freesound.org/s/189630/
+  204481  BIG SLOT PAYOUT_0331 — gthall  https://freesound.org/s/204481/
+  212181  Loopable Ticking Clock — OwlStorm  https://freesound.org/s/212181/
+  221528  Glass Break — unfa  https://freesound.org/s/221528/
+  257927  Bones Crack 2 — Kane53126  https://freesound.org/s/257927/
+  333611  Ratchet2 — blevesque4  https://freesound.org/s/333611/
+  334969  Many Coins Dumped on a Wooden Surface — dominictreis  https://freesound.org/s/334969/
+  336425  Glass Shattering and Falling — 221Beimesche  https://freesound.org/s/336425/
+  349905  Slow Motion Glass Shatter — bevibeldesign  https://freesound.org/s/349905/
+  361346  slot machine payout — jack126guy  https://freesound.org/s/361346/
+  422513  Swinging staff whoosh (strong) 04 — Nightflame  https://freesound.org/s/422513/
+  456966  Success Fanfare Trumpets — FunWithSound  https://freesound.org/s/456966/
+  581083  Pressure Hiss — magnuswaker  https://freesound.org/s/581083/
+  607407  Fanfare 3 - Rpg — colorsCrimsonTears  https://freesound.org/s/607407/
+  630594  bone break_5 — Vinni_R  https://freesound.org/s/630594/
+  641074  Bone Snap/Break — Ryanz-Official  https://freesound.org/s/641074/
+  686849  glass shatter — ccen18  https://freesound.org/s/686849/
+  688735  Heartbeat 97 BPM — Cloud-10  https://freesound.org/s/688735/
+  697758  Metal Resonant Scrape Impact — SoundDesignForYou  https://freesound.org/s/697758/
+  723999  Servo motor working — D31V228  https://freesound.org/s/723999/
+  740246  Servo 8 — JoontheFloof  https://freesound.org/s/740246/
+  758207  Glass panel shattering — LukaCafuka  https://freesound.org/s/758207/
+  812468  Angelic Fanfare 2 — qubodup  https://freesound.org/s/812468/
+  813061  Robot mechanism-002 — AudioPapkin  https://freesound.org/s/813061/
+  813066  Robot mechanism-007 — AudioPapkin  https://freesound.org/s/813066/
+  854269  Industrial Machine Drone (Seamless Loop) — kkenny101  https://freesound.org/s/854269/
+  872378  Bone Crack — cb9382  https://freesound.org/s/872378/
+  875419  Robotic Servo Short Arm Movement — harrisonlace  https://freesound.org/s/875419/
